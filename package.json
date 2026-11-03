@@ -1,0 +1,14 @@
+{
+  "name": "couple-play",
+  "version": "1.0.0",
+  "private": true,
+  "description": "双人房 —— 情侣远程互动页（转盘 / 真心话大冒险 / 实时同步）",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}

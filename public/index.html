@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#12070f" />
+<meta name="robots" content="noindex, nofollow, noarchive" />
+<title>双人房 · 只有我们两个人的游戏</title>
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ================= 18+ 门禁 ================= -->
+  <section class="gate" id="gate">
+    <div class="gate-inner">
+      <div class="gate-mark">18<sup>+</sup></div>
+      <h1>双人房</h1>
+      <p class="gate-sub">一个只属于两个人的小房间<br/>转盘、真心话、以及更深夜的那部分</p>
+      <ul class="gate-list">
+        <li>本页面含成年情侣向亲密内容，请确认双方均已满 18 周岁</li>
+        <li>所有玩法建立在双方自愿与知情同意之上</li>
+        <li>任何时候说出安全词，一切立刻停止</li>
+      </ul>
+      <button class="btn btn-primary btn-lg" id="gateEnter">我已成年，并且我们都说好了</button>
+      <button class="btn btn-ghost" id="gateLeave">我还不想进去</button>
+    </div>
+  </section>
+
+  <!-- ================= 首页 ================= -->
+  <section class="screen" id="screen-home">
+    <header class="brand">
+      <div class="brand-dot"></div>
+      <div>
+        <h1>双人房</h1>
+        <p>今晚，我们玩点什么</p>
+      </div>
+    </header>
+
+    <div class="stack">
+      <button class="tile tile-main" data-action="create">
+        <span class="tile-icon">🔗</span>
+        <span class="tile-body">
+          <strong>开一间双人房</strong>
+          <em>生成 6 位匹配码，发给 Ta</em>
+        </span>
+        <span class="tile-arrow">→</span>
+      </button>
+
+      <button class="tile" data-action="join">
+        <span class="tile-icon">🎟️</span>
+        <span class="tile-body">
+          <strong>我有匹配码</strong>
+          <em>输入 Ta 发来的六位数字</em>
+        </span>
+        <span class="tile-arrow">→</span>
+      </button>
+
+      <button class="tile" data-action="solo">
+        <span class="tile-icon">🕯️</span>
+        <span class="tile-body">
+          <strong>一个人先玩</strong>
+          <em>单人模式，不需要联网</em>
+        </span>
+        <span class="tile-arrow">→</span>
+      </button>
+    </div>
+
+    <div class="quote-card">
+      <span>今晚的暗号</span>
+      <p id="quoteText">“先说好：谁先笑，谁先摘一件配饰。”</p>
+    </div>
+
+    <div class="foot-note">
+      <button class="link" data-nav="safety">先看看我们的规则 →</button>
+    </div>
+  </section>
+
+  <!-- ================= 房间 / 匹配 ================= -->
+  <section class="screen" id="screen-room">
+    <header class="topbar">
+      <button class="icon-btn" data-nav="home">←</button>
+      <span class="topbar-title" id="roomTitle">双人房</span>
+      <span class="conn" id="connDot"><i></i><b>未连接</b></span>
+    </header>
+
+    <div class="code-card" id="codeCard">
+      <p class="code-label" id="codeLabel">把这串数字发给 Ta</p>
+      <div class="code-value" id="codeValue">------</div>
+      <button class="btn btn-dark" id="copyCode">复制匹配码</button>
+      <p class="code-tip" id="codeTip">Ta 在首页选「我有匹配码」，输入即可进入同一个房间</p>
+    </div>
+
+    <div class="members" id="members"></div>
+
+    <div class="steps" id="roomSteps"></div>
+
+    <div class="safeword-strip">🛑 安全词 <b>红灯</b> —— 任何一方说出口，一切立刻停止</div>
+
+    <div class="join-box" id="joinBox" hidden>
+      <label class="field-label">输入 Ta 发来的匹配码</label>
+      <input class="code-input" id="joinInput" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="off" />
+      <input class="text-input" id="joinName" maxlength="8" placeholder="你的昵称（Ta 会看到）" />
+      <button class="btn btn-primary btn-lg" id="joinBtn">进入房间</button>
+      <p class="err" id="joinErr"></p>
+    </div>
+
+    <div class="room-actions" id="roomActions" hidden>
+      <input class="text-input" id="hostName" maxlength="8" placeholder="你的昵称（Ta 会看到）" />
+      <button class="btn btn-primary btn-lg" id="startPlay">开始今晚</button>
+      <p class="hint" id="waitHint">等 Ta 进来，两个人一起开始</p>
+    </div>
+  </section>
+
+  <!-- ================= 模式选择 ================= -->
+  <section class="screen" id="screen-mode">
+    <header class="topbar">
+      <button class="icon-btn" data-nav="room">←</button>
+      <span class="topbar-title">选个玩法</span>
+      <span class="conn" id="connDot2"><i></i><b>单人</b></span>
+    </header>
+
+    <div class="mode-grid">
+      <button class="mode-card" data-mode="wheel">
+        <div class="mode-visual wheel-visual"><span></span></div>
+        <strong>转盘</strong>
+        <em>四档主题，转到什么做什么</em>
+      </button>
+      <button class="mode-card" data-mode="truth">
+        <div class="mode-visual truth-visual">?</div>
+        <strong>真心话 · 大冒险</strong>
+        <em>四个强度，抽卡决定这一轮</em>
+      </button>
+    </div>
+
+    <div class="steps" id="modeSteps">
+      <p class="steps-title">怎么玩</p>
+      <ol>
+        <li><b>1</b><span>转到或抽到的人负责做，另一个人负责看 —— 完成一次换人</span></li>
+        <li><b>2</b><span>双人房里，谁按下转盘，两边会同时转、同时出结果</span></li>
+        <li><b>3</b><span>底部红色按钮就是安全词，按下去两个人一起停</span></li>
+        <li><b>4</b><span>强度从「微甜」到「契约」，先问清楚再往上走</span></li>
+      </ol>
+    </div>
+
+    <div class="mini-row">
+      <button class="chip" data-nav="safety">📖 安全规则</button>
+      <button class="chip" id="safewordChip">🔴 安全词：红灯</button>
+    </div>
+  </section>
+
+  <!-- ================= 转盘 ================= -->
+  <section class="screen" id="screen-wheel">
+    <header class="topbar">
+      <button class="icon-btn" data-nav="mode">←</button>
+      <span class="topbar-title">转盘</span>
+      <span class="points" id="pointsPill">💗 <b>0</b></span>
+    </header>
+
+    <div class="pills" id="themePills"></div>
+
+    <div class="turn-bar" id="turnBar"></div>
+
+    <div class="wheel-stage">
+      <div class="wheel-glow"></div>
+      <div class="wheel-pointer"></div>
+      <canvas id="wheel" width="640" height="640"></canvas>
+      <button class="wheel-hub" id="spinBtn">
+        <span>转</span>
+      </button>
+    </div>
+
+    <p class="theme-sub" id="themeSub"></p>
+
+    <div class="result-panel" id="wheelResult">
+      <div class="result-empty">
+        <span>✨</span>
+        <p>按下中间的「转」，让今晚交给运气</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 真心话 / 大冒险 ================= -->
+  <section class="screen" id="screen-truth">
+    <header class="topbar">
+      <button class="icon-btn" data-nav="mode">←</button>
+      <span class="topbar-title">真心话 · 大冒险</span>
+      <span class="points" id="pointsPill2">💗 <b>0</b></span>
+    </header>
+
+    <div class="pills" id="levelPills"></div>
+
+    <div class="turn-bar" id="turnBar2"></div>
+
+    <div class="pick-row">
+      <button class="pick-card pick-truth" data-pick="truth">
+        <span class="pick-badge">真心话</span>
+        <span class="pick-emoji">🗝️</span>
+        <em id="truthCount">10 张</em>
+      </button>
+      <button class="pick-card pick-dare" data-pick="dare">
+        <span class="pick-badge">大冒险</span>
+        <span class="pick-emoji">🔥</span>
+        <em id="dareCount">10 张</em>
+      </button>
+    </div>
+
+    <div class="result-panel" id="truthResult">
+      <div class="result-empty">
+        <span>🃏</span>
+        <p>选一边，抽一张</p>
+      </div>
+    </div>
+
+    <div class="mini-row">
+      <button class="chip" id="addCardBtn">＋ 加一张我们自己的卡</button>
+    </div>
+  </section>
+
+  <!-- ================= 安全规则 ================= -->
+  <section class="screen" id="screen-safety">
+    <header class="topbar">
+      <button class="icon-btn" data-nav="back">←</button>
+      <span class="topbar-title">我们的规则</span>
+      <span></span>
+    </header>
+    <div class="safety-list" id="safetyList"></div>
+    <div class="safeword-card">
+      <p>当前安全词</p>
+      <strong id="safewordShow">红灯</strong>
+      <span>说出它的那一刻，所有动作立刻停止，不需要理由</span>
+    </div>
+    <div class="history-card">
+      <p class="history-title">今晚记录</p>
+      <ul id="historyList"><li class="empty">还没有记录</li></ul>
+    </div>
+  </section>
+
+  <!-- ================= 安全词遮罩 ================= -->
+  <div class="stop-overlay" id="stopOverlay" hidden>
+    <div class="stop-inner">
+      <div class="stop-icon">🛑</div>
+      <h2>已全部停止</h2>
+      <p id="stopWho">有人喊了安全词</p>
+      <p class="stop-sub">先抱一下。喝水、盖被子、说一句真话，然后再决定要不要继续。</p>
+      <button class="btn btn-primary btn-lg" id="resumeBtn">我们都缓过来了，继续</button>
+      <button class="btn btn-ghost" data-nav="mode" id="stopExit">今晚到此为止</button>
+    </div>
+  </div>
+
+  <!-- ================= 底部导航（房间内） ================= -->
+  <nav class="tabbar" id="tabbar" hidden>
+    <button data-nav="wheel">🎡<span>转盘</span></button>
+    <button data-nav="truth">🃏<span>真心话</span></button>
+    <button data-nav="safety">📖<span>规则</span></button>
+    <button id="sosBtn" class="sos">🛑<span>安全词</span></button>
+  </nav>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<!-- 自定义卡片弹层 -->
+<div class="sheet" id="cardSheet" hidden>
+  <div class="sheet-panel">
+    <p class="sheet-title">加一张我们自己的卡</p>
+    <select class="text-input" id="newCardType">
+      <option value="truth">真心话</option>
+      <option value="dare">大冒险</option>
+    </select>
+    <select class="text-input" id="newCardLevel">
+      <option value="1">L1 微甜</option>
+      <option value="2">L2 暧昧</option>
+      <option value="3">L3 心跳</option>
+      <option value="4">L4 深夜</option>
+    </select>
+    <textarea class="text-input" id="newCardText" rows="3" maxlength="80" placeholder="写一句只有你们懂的"></textarea>
+    <div class="sheet-btns">
+      <button class="btn btn-ghost" id="sheetCancel">取消</button>
+      <button class="btn btn-primary" id="sheetSave">添加</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/vendor/peerjs.min.js"></script>
+<script src="js/net.js"></script>
+<script src="js/data.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
