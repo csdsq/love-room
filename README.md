@@ -9,11 +9,11 @@
 
 ## 在线地址
 
-部署在 GitHub Pages：
+```
+https://love.hser.ren
+```
 
-```
-https://csdsq.github.io/love-room/
-```
+托管在 GitHub Pages（仓库 `csdsq/love-room`），绑定自定义域名 `love.hser.ren`，证书由 GitHub 自动签发续期。
 
 手机打开就能用，两个人的手机各开一个，输同一个匹配码即同房。
 
@@ -77,6 +77,10 @@ PORT=8080 node server.js  # 换端口
 ```
 
 改完页面推上去，等 Actions 跑完（约 30 秒）刷新即可。
+
+- 仓库：`https://github.com/csdsq/love-room`
+- 站点：`https://love.hser.ren`（Pages 自定义域名，已强制 HTTPS）
+- DNS：Cloudflare 上 `love` → CNAME → `csdsq.github.io`（DNS only，证书走 GitHub）
 
 想部署到别的地方（Cloudflare Pages / Netlify / Vercel / 任意静态托管）：
 把 `public/` 目录整个上传，站点根指向它，就完事了。不需要任何构建命令。
