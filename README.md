@@ -82,6 +82,18 @@ PORT=8080 node server.js  # 换端口
 - 站点：`https://love.hser.ren`（Pages 自定义域名，已强制 HTTPS）
 - DNS：Cloudflare 上 `love` → CNAME → `csdsq.github.io`（DNS only，证书走 GitHub）
 
+### 如果 `git push` 推不上去
+
+有些网络里 git 的 HTTPS POST 会被代理掐断（`CONNECT tunnel failed, response 502`），
+但 GitHub API 是通的，这时用仓库自带的发布脚本：
+
+```bash
+GITHUB_TOKEN=你的token node tools/deploy.mjs "这次改了什么"
+```
+
+它会比对本地文件和远端 Git tree 的 sha，只提交真正变化的部分，然后自动触发 Pages 重新部署。
+token 从这个环境变量读，不写进任何文件。
+
 想部署到别的地方（Cloudflare Pages / Netlify / Vercel / 任意静态托管）：
 把 `public/` 目录整个上传，站点根指向它，就完事了。不需要任何构建命令。
 
