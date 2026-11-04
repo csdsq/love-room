@@ -162,7 +162,7 @@ body::before {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.screen.has-tab { padding-bottom: calc(92px + var(--safe-b)); }
+.screen.has-dock { padding-bottom: calc(var(--dock-pad, 20px) + var(--safe-b)); }
 
 /* ---------------- 首页 ---------------- */
 .brand { display: flex; align-items: center; gap: 12px; padding: 24px 2px 30px; }
@@ -607,28 +607,7 @@ body::before {
 .stop-inner p { font-size: 13px; color: #e6cdd8; line-height: 1.8; margin: 0 0 8px; }
 .stop-sub { color: var(--muted) !important; margin-bottom: 26px !important; font-size: 12px !important; }
 
-/* ---------------- 底部导航 ---------------- */
-.tabbar {
-  position: fixed;
-  bottom: 0; left: 50%; transform: translateX(-50%);
-  width: 100%; max-width: 460px;
-  display: flex; align-items: center; justify-content: space-around;
-  padding: 10px 10px calc(10px + var(--safe-b));
-  background: rgba(22, 9, 18, 0.86);
-  backdrop-filter: blur(20px);
-  border-top: 1px solid var(--line);
-  z-index: 40;
-}
-.tabbar button {
-  flex: 1;
-  display: flex; flex-direction: column; align-items: center; gap: 3px;
-  background: none; border: 0; color: var(--muted);
-  font-size: 17px; font-family: inherit; cursor: pointer;
-  padding: 4px 0;
-}
-.tabbar button span { font-size: 10.5px; letter-spacing: 0.06em; }
-.tabbar button.active { color: var(--rose-soft); }
-.tabbar .sos { color: #ff8b95; }
+.topbar-title { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------------- 自定义卡片弹层 ---------------- */
 .sheet {
@@ -682,20 +661,32 @@ select.text-input { appearance: none; }
 
 
 /* ---------------- 聊天区（转盘 / 真心话页底部常驻，点对点不落盘） ---------------- */
+/* 三态高度写死（不用 CSS 变量驱动 height，否则 transition 会卡在旧值）
+   --dock-pad 只用于页面内容让位，不参与动画 */
+body {
+  --dock-pad: calc(min(40vh, 340px) + 18px);
+}
+body.dock-fold {
+  --dock-pad: calc(48px + 14px);
+}
+
 .chat-dock {
   position: fixed;
-  left: 50%; bottom: calc(74px + var(--safe-b));
+  left: 50%; bottom: 0;
   transform: translateX(-50%);
   width: 100%; max-width: 460px;
-  height: min(40vh, 340px);
+  height: calc(min(40vh, 340px) + var(--safe-b));
+  padding-bottom: var(--safe-b);
   z-index: 44;
   display: flex; flex-direction: column;
-  background: rgba(20, 8, 15, 0.92);
+  background: rgba(20, 8, 15, 0.94);
   backdrop-filter: blur(18px);
   border-top: 1px solid rgba(255, 120, 160, 0.22);
   border-radius: 20px 20px 0 0;
   box-shadow: 0 -14px 40px rgba(0, 0, 0, 0.45);
   overflow: hidden;
+  /* 注意：不要给 height 加 transition —— height 用 calc(100vh…) 时
+     Chrome 会算出错误的目标值并卡住，导致三态切换永远慢一拍 */
   animation: dockIn 0.26s ease both;
 }
 .chat-dock[hidden] { display: none; }
@@ -706,20 +697,47 @@ select.text-input { appearance: none; }
 
 .chat-dock-head {
   flex-shrink: 0;
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 14px;
+  display: flex; align-items: center; gap: 7px;
+  height: 48px;
+  padding: 0 10px 0 14px;
   border-bottom: 1px solid var(--line);
   font-size: 11.5px; color: var(--muted);
+  cursor: pointer;
+  user-select: none;
 }
-.chat-dock-title { flex: 1; min-width: 0; letter-spacing: 0.02em; }
+.chat-dock-title { flex: 1; min-width: 0; letter-spacing: 0.02em; display: flex; align-items: baseline; gap: 6px; }
 .chat-dock-title b { color: var(--rose-soft); font-weight: 600; }
-.chat-dock-conn { font-size: 10.5px; }
-.chat-dock-tip { font-size: 10px; opacity: 0.75; }
+.chat-dock-sub { font-size: 10px; opacity: 0.72; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-dock-conn { font-size: 10.5px; flex-shrink: 0; }
 
-/* 页面内容给 tabbar + 聊天区让位 */
-body.dock-open .screen.has-tab {
-  padding-bottom: calc(90px + min(40vh, 340px) + var(--safe-b));
+.dock-btn {
+  flex-shrink: 0;
+  width: 28px; height: 28px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-family: inherit; font-size: 13px; line-height: 1;
+  display: grid; place-items: center;
+  cursor: pointer;
+  transition: transform 0.2s ease, color 0.2s ease;
 }
+.dock-btn:active { transform: scale(0.9); }
+.dock-btn.active { color: var(--rose-soft); border-color: rgba(255, 120, 160, 0.45); }
+
+body.dock-full .chat-dock { height: calc(100vh - 70px); }
+body.dock-fold .chat-dock { height: calc(48px + var(--safe-b)); }
+
+/* 折叠态：只留一条，输入区与记录都收起来 */
+body.dock-fold .chat-list,
+body.dock-fold .chat-compose,
+body.dock-fold .chat-rec { display: none; }
+body.dock-fold #dockFold { transform: rotate(180deg); }
+body.dock-fold #dockExpand { display: none; }
+
+/* 页面内容给聊天区让位 */
+.screen.has-dock { padding-bottom: calc(var(--dock-pad) + var(--safe-b)); }
+body.dock-full .screen.has-dock { padding-bottom: calc(min(40vh, 340px) + 18px + var(--safe-b)); }
 
 .chat-list {
   flex: 1;
@@ -864,4 +882,60 @@ body.dock-open .screen.has-tab {
 
 @media (min-width: 520px) {
   .chat-dock { box-shadow: 0 -14px 60px rgba(0, 0, 0, 0.55); }
+}
+
+/* ---------------- 语音播放中的动态波形 ---------------- */
+.voice .bars span { transform-origin: center; }
+.voice.playing .bars span { animation: voiceWave 0.86s ease-in-out infinite; }
+.voice.playing .bars span:nth-child(1) { animation-delay: 0s;    }
+.voice.playing .bars span:nth-child(2) { animation-delay: 0.13s; }
+.voice.playing .bars span:nth-child(3) { animation-delay: 0.26s; }
+.voice.playing .bars span:nth-child(4) { animation-delay: 0.07s; }
+.voice.playing .bars span:nth-child(5) { animation-delay: 0.2s;  }
+.voice.playing .bars span:nth-child(6) { animation-delay: 0.32s; }
+.voice.playing .bars span:nth-child(7) { animation-delay: 0.1s;  }
+@keyframes voiceWave {
+  0%, 100% { transform: scaleY(0.38); opacity: 0.6; }
+  50%      { transform: scaleY(1);    opacity: 1; }
+}
+/* 播放中把三角换成暂停双竖线 */
+.voice.playing i {
+  width: 10px; height: 12px;
+  border: 0;
+  border-left: 3.5px solid currentColor;
+  border-right: 3.5px solid currentColor;
+  box-sizing: border-box;
+}
+
+/* ---------------- 发送媒体：来源选择 ---------------- */
+.sheet-compact { gap: 14px; }
+.sheet-actions { display: flex; gap: 12px; }
+.sheet-action {
+  flex: 1;
+  display: flex; flex-direction: column; align-items: center; gap: 9px;
+  padding: 18px 10px;
+  border-radius: 16px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-family: inherit; font-size: 12.5px;
+  cursor: pointer;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+.sheet-action span { font-size: 26px; line-height: 1; }
+.sheet-action b { font-weight: 500; letter-spacing: 0.02em; }
+.sheet-action:active { transform: scale(0.97); background: var(--card-2); }
+
+/* ---------------- 玩法页的安全词提示（不做常驻按钮） ---------------- */
+.chip-sos {
+  color: #ff9aa5;
+  border-color: rgba(255, 90, 120, 0.4);
+  background: rgba(255, 60, 90, 0.12);
+}
+.safety-hint {
+  margin: 12px 2px 0;
+  font-size: 11.5px;
+  line-height: 1.75;
+  color: var(--muted);
+  opacity: 0.9;
 }

@@ -40,6 +40,7 @@
     turnName: null,
     navStack: [],
     chat: [],              // 聊天记录只活在内存里
+    unread: 0,             // 折叠态下的新消息数
   };
 
   /* ------------------------------------------------------------------ */
@@ -310,12 +311,9 @@
       if (state.navStack.length > 12) state.navStack = state.navStack.slice(-12);
     }
 
-    const showTab = TAB_SCREENS.includes(id);
-    $('#tabbar').hidden = !showTab;
-    el.classList.toggle('has-tab', showTab);
-    $$('#tabbar button').forEach(b => b.classList.toggle('active', b.dataset.nav === id));
-
-    if (showTab) setConn(state.connected);
+    const withDock = (id === 'wheel' || id === 'truth');
+    el.classList.toggle('has-dock', withDock);
+    if (withDock) setConn(state.connected);
     if (id === 'wheel' || id === 'truth') renderTurn();
     updateChatChrome();
 
@@ -352,7 +350,11 @@
     if (recState && recState.active) cancelRecord();
     state.chat.forEach(m => { if (m.url) URL.revokeObjectURL(m.url); });
     state.chat = [];
+    state.unread = 0;
+    playingUrl = null;
+    if (voiceAudio) { voiceAudio.pause(); voiceAudio = null; }
     inbox.clear();
+    document.body.classList.remove('dock-fold', 'dock-full');
     setConn(false);
     updateChatChrome();
   }
@@ -806,6 +808,7 @@
   const inbox = new Map();                 // 正在接收的分片
   let recState = null;                     // 录音状态
   let voiceAudio = null;
+  let playingUrl = null;                   // 正在播放的语音（用于波形动画）
 
   const chatId = () => 'c' + Math.random().toString(36).slice(2, 9);
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -818,6 +821,10 @@
     return new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
   }
 
+  function dockFolded() {
+    return document.body.classList.contains('dock-fold');
+  }
+
   function updateChatChrome() {
     const dock = $('#chatDock');
     if (!dock) return;
@@ -825,12 +832,17 @@
     const on = isDuo() && (view === 'wheel' || view === 'truth');
     dock.hidden = !on;
     document.body.classList.toggle('dock-open', on);
+    if (!on) document.body.classList.remove('dock-fold', 'dock-full');
     if (on) renderChat();
 
     const who = $('#chatWho');
     if (who) who.textContent = state.partnerName || 'Ta';
     const hint = $('#chatHint');
-    if (hint) hint.textContent = state.connected ? '点对点 · 不存档' : 'Ta 掉线了，先等等';
+    if (hint) {
+      if (!state.connected) hint.textContent = 'Ta 掉线了，先等等';
+      else if (dockFolded()) hint.textContent = state.unread ? `${state.unread} 条新消息` : '点开看聊天';
+      else hint.textContent = '点对点 · 不存档';
+    }
     const dot = $('#connDot3');
     if (dot) {
       dot.classList.toggle('on', state.connected);
@@ -841,10 +853,59 @@
     if (send) send.disabled = !state.connected;
     const tools = [$('#chatImg'), $('#chatVid'), $('#chatMic')];
     tools.forEach(t => { if (t) t.disabled = !state.connected; });
+
+    const expand = $('#dockExpand');
+    if (expand) {
+      const full = document.body.classList.contains('dock-full');
+      expand.textContent = full ? '⤡' : '⤢';
+      expand.title = full ? '还原' : '展开聊天';
+      expand.classList.toggle('active', full);
+    }
+  }
+
+  /* 聊天区三态：normal（2/5 屏）/ full（接近全屏）/ fold（一条） */
+  function setDockMode(mode) {
+    const b = document.body;
+    b.classList.toggle('dock-full', mode === 'full');
+    b.classList.toggle('dock-fold', mode === 'fold');
+    if (mode !== 'fold') state.unread = 0;
+    if (mode === 'fold') {
+      // 收起时把键盘和输入焦点一起收掉
+      const input = $('#chatInput');
+      if (input) input.blur();
+      if (recState && recState.active) cancelRecord();
+    }
+    updateChatChrome();
+    if (mode !== 'fold') setTimeout(() => renderChat(), 260);
+  }
+
+  function toggleDockExpand() {
+    setDockMode(document.body.classList.contains('dock-full') ? 'normal' : 'full');
+  }
+
+  function toggleDockFold() {
+    setDockMode(dockFolded() ? 'normal' : 'fold');
   }
 
   function dockVisible() {
     return !$('#chatDock').hidden;
+  }
+
+  /* 收到消息：面板没开→弹提示；收起→累计未读；开着→直接刷 */
+  function onIncoming(tip) {
+    if (!dockVisible()) {
+      if (tip) toast(tip);
+      vibrate(18);
+      return;
+    }
+    if (dockFolded()) {
+      state.unread += 1;
+      vibrate(14);
+      updateChatChrome();
+      return;
+    }
+    renderChat();
+    vibrate(14);
   }
 
   function pushMsg(m) {
@@ -909,6 +970,8 @@
     if (!list) return;
     list.innerHTML = state.chat.length ? state.chat.map(msgHtml).join('') : chatEmptyHtml();
     list.scrollTop = list.scrollHeight;
+    // 重渲染后把「正在播放」的高亮补回去
+    if (playingUrl) markVoicePlaying(playingUrl);
   }
 
   function paintProgress(id) {
@@ -1033,11 +1096,8 @@
     } catch (e) {
       m.status = 'fail';
     }
-    renderChat();
-    if (!dockVisible()) {
-      toast(`${msg.fromName || 'Ta'} 发来了一条${msg.kind === 'voice' ? '语音' : msg.kind === 'image' ? '图片' : '视频'}`);
-      vibrate(18);
-    }
+    const kindName = msg.kind === 'voice' ? '语音' : msg.kind === 'image' ? '图片' : '视频';
+    onIncoming(`${msg.fromName || 'Ta'} 发来了一条${kindName}`);
   }
 
   /* ---------------- 发图 ---------------- */
@@ -1162,24 +1222,37 @@
       id: msg.id || chatId(), mine: false, kind: 'text', text,
       at: msg.at || Date.now(), status: 'done', name: msg.fromName || 'Ta',
     });
-    if (dockVisible()) {
-      renderChat();
-      vibrate(14);
-    } else {
-      toast(`${msg.fromName || 'Ta'}：${text.slice(0, 24)}`);
-      vibrate(18);
-    }
+    onIncoming(`${msg.fromName || 'Ta'}：${text.slice(0, 24)}`);
+  }
+
+  /* 点一下播放：波形跳动 + 三角变暂停键；再点一下停 */
+  function markVoicePlaying(url) {
+    playingUrl = url;
+    $$('#chatList .voice').forEach(b => {
+      const on = !!url && b.dataset.voice === url;
+      b.classList.toggle('playing', on);
+      b.setAttribute('aria-label', on ? '暂停语音' : '播放语音');
+    });
   }
 
   function playVoice(url) {
     if (!url) return;
+    // 再点一次同一条 = 暂停
     if (voiceAudio && voiceAudio.src === url && !voiceAudio.paused) {
       voiceAudio.pause();
       return;
     }
     if (voiceAudio) voiceAudio.pause();
-    voiceAudio = new Audio(url);
-    voiceAudio.play().catch(() => toast('这条语音解不开（录音格式不兼容）'));
+
+    const a = new Audio(url);
+    voiceAudio = a;
+    a.addEventListener('play', () => markVoicePlaying(url));
+    a.addEventListener('pause', () => { if (playingUrl === url) markVoicePlaying(null); });
+    a.addEventListener('ended', () => { if (playingUrl === url) markVoicePlaying(null); });
+    a.play().catch(() => {
+      markVoicePlaying(null);
+      toast('这条语音解不开（录音格式不兼容）');
+    });
   }
 
   /* ------------------------------------------------------------------ */
@@ -1330,9 +1403,7 @@
       if (isDuo()) emit({ type: 'name', name });
     });
 
-    // 安全词
-    $('#sosBtn').addEventListener('click', () => callSafeword('红灯'));
-    $('#safewordChip').addEventListener('click', () => go('safety'));
+    $('#safewordChip').addEventListener('click', () => callSafeword('红灯'));
     $('#resumeBtn').addEventListener('click', resume);
     $('#stopExit').addEventListener('click', () => {
       state.paused = false;
@@ -1374,18 +1445,53 @@
       }
     });
 
-    $('#chatImg').addEventListener('click', () => $('#fileImg').click());
-    $('#chatVid').addEventListener('click', () => $('#fileVid').click());
-    $('#fileImg').addEventListener('change', async (e) => {
-      const f = e.target.files && e.target.files[0];
-      e.target.value = '';
-      await pickImage(f);
+    // 聊天区：展开 / 收起
+    $('#dockExpand').addEventListener('click', (e) => { e.stopPropagation(); toggleDockExpand(); });
+    $('#dockFold').addEventListener('click', (e) => { e.stopPropagation(); toggleDockFold(); });
+    // 点标题栏也能收起 / 展开
+    $('#chatDock').querySelector('.chat-dock-head').addEventListener('click', () => {
+      if (dockFolded()) setDockMode('normal');
+      else toggleDockFold();
     });
-    $('#fileVid').addEventListener('change', async (e) => {
-      const f = e.target.files && e.target.files[0];
-      e.target.value = '';
-      await pickVideo(f);
+
+    // 发送媒体：先问「拍 / 从相册选」
+    let mediaKind = 'image';
+    const openMediaSheet = (kind) => {
+      mediaKind = kind;
+      const isImg = kind === 'image';
+      $('#mediaTitle').textContent = isImg ? '发一张图片' : '发一段视频';
+      $('#mediaCamIcon').textContent = isImg ? '📷' : '📹';
+      $('#mediaCamText').textContent = isImg ? '拍照' : '录像';
+      $('#mediaPickIcon').textContent = isImg ? '🖼️' : '🎞️';
+      $('#mediaPickText').textContent = isImg ? '从相册选择' : '从相册选择视频';
+      $('#mediaSheet').hidden = false;
+    };
+    const closeMediaSheet = () => { $('#mediaSheet').hidden = true; };
+
+    $('#chatImg').addEventListener('click', () => openMediaSheet('image'));
+    $('#chatVid').addEventListener('click', () => openMediaSheet('video'));
+    $('#mediaCancel').addEventListener('click', closeMediaSheet);
+    $('#mediaSheet').addEventListener('click', (e) => { if (e.target.id === 'mediaSheet') closeMediaSheet(); });
+    $('#mediaCam').addEventListener('click', () => {
+      closeMediaSheet();
+      $(mediaKind === 'image' ? '#fileImgCam' : '#fileVidCam').click();
     });
+    $('#mediaPick').addEventListener('click', () => {
+      closeMediaSheet();
+      $(mediaKind === 'image' ? '#fileImgPick' : '#fileVidPick').click();
+    });
+
+    const bindMedia = (sel, handler) => {
+      $(sel).addEventListener('change', async (e) => {
+        const f = e.target.files && e.target.files[0];
+        e.target.value = '';           // 允许连续选同一个文件
+        if (f) await handler(f);
+      });
+    };
+    bindMedia('#fileImgCam', pickImage);
+    bindMedia('#fileImgPick', pickImage);
+    bindMedia('#fileVidCam', pickVideo);
+    bindMedia('#fileVidPick', pickVideo);
 
     $('#chatMic').addEventListener('click', () => {
       if (recState && recState.active) stopRecord(true);

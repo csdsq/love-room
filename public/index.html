@@ -141,15 +141,16 @@
       <ol>
         <li><b>1</b><span>转到或抽到的人负责做，另一个人负责看 —— 完成一次换人</span></li>
         <li><b>2</b><span>双人房里，谁按下转盘，两边会同时转、同时出结果</span></li>
-        <li><b>3</b><span>底部红色按钮就是安全词，按下去两个人一起停</span></li>
+        <li><b>3</b><span>任何时候说一句「红灯」就停 —— 回到玩法选择页也有「现在停下」按钮</span></li>
         <li><b>4</b><span>强度从「入门」到「契约」：先谈边界，再往上走</span></li>
       </ol>
     </div>
 
     <div class="mini-row">
       <button class="chip" data-nav="safety">📖 安全规则</button>
-      <button class="chip" id="safewordChip">🔴 安全词：红灯</button>
+      <button class="chip chip-sos" id="safewordChip">🔴 现在停下</button>
     </div>
+    <p class="safety-hint">任何时候说一句「红灯」，两个人都立刻停，不需要解释。</p>
   </section>
 
   <!-- ================= 转盘 ================= -->
@@ -251,20 +252,13 @@
     </div>
   </div>
 
-  <!-- ================= 底部导航（房间内） ================= -->
-  <nav class="tabbar" id="tabbar" hidden>
-    <button data-nav="wheel">🎡<span>转盘</span></button>
-    <button data-nav="truth">🃏<span>真心话</span></button>
-    <button data-nav="safety">📖<span>规则</span></button>
-    <button id="sosBtn" class="sos">🛑<span>安全词</span></button>
-  </nav>
-
-  <!-- ================= 聊天区（转盘 / 真心话页底部常驻） ================= -->
+  <!-- ================= 聊天区（转盘 / 真心话页底部常驻，可展开折叠） ================= -->
   <section class="chat-dock" id="chatDock" hidden>
     <header class="chat-dock-head">
-      <span class="chat-dock-title">💬 和 <b id="chatWho">Ta</b> 的悄悄话</span>
+      <span class="chat-dock-title">💬 <b id="chatWho">Ta</b><span class="chat-dock-sub" id="chatHint">点对点 · 不存档</span></span>
       <span class="conn chat-dock-conn" id="connDot3"><i></i><b>已同步</b></span>
-      <span class="chat-dock-tip" id="chatHint">点对点 · 不存档</span>
+      <button class="dock-btn" id="dockFold" title="收起聊天">▾</button>
+      <button class="dock-btn" id="dockExpand" title="展开聊天">⤢</button>
     </header>
     <div class="chat-list" id="chatList">
       <div class="chat-empty" id="chatEmpty">
@@ -286,9 +280,25 @@
       <textarea id="chatInput" rows="1" maxlength="500" placeholder="说点什么…"></textarea>
       <button class="chat-send" id="chatSend">发送</button>
     </div>
-    <input type="file" id="fileImg" accept="image/*" hidden />
-    <input type="file" id="fileVid" accept="video/*" hidden />
+    <input type="file" id="fileImgCam" accept="image/*" capture="user" hidden />
+    <input type="file" id="fileImgPick" accept="image/*" hidden />
+    <input type="file" id="fileVidCam" accept="video/*" capture="user" hidden />
+    <input type="file" id="fileVidPick" accept="video/*" hidden />
   </section>
+
+  <!-- ================= 发送媒体：先选来源 ================= -->
+  <div class="sheet" id="mediaSheet" hidden>
+    <div class="sheet-panel sheet-compact">
+      <p class="sheet-title" id="mediaTitle">发图片</p>
+      <div class="sheet-actions">
+        <button class="sheet-action" id="mediaCam"><span id="mediaCamIcon">📷</span><b id="mediaCamText">拍照</b></button>
+        <button class="sheet-action" id="mediaPick"><span id="mediaPickIcon">🖼️</span><b id="mediaPickText">从相册选择</b></button>
+      </div>
+      <div class="sheet-btns">
+        <button class="btn btn-ghost" id="mediaCancel">取消</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ================= 图片放大 ================= -->
   <div class="chat-viewer" id="chatViewer" hidden>
