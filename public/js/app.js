@@ -40,8 +40,6 @@
     turnName: null,
     navStack: [],
     chat: [],              // 聊天记录只活在内存里
-    chatOpen: false,
-    unread: 0,
   };
 
   /* ------------------------------------------------------------------ */
@@ -145,7 +143,7 @@
       // 传输到一半的文件标记为失败
       inbox.clear();
       state.chat.forEach(m => { if (m.status === 'sending' || m.status === 'receiving') m.status = 'fail'; });
-      if (!$('#chatPanel').hidden) renderChat();
+      if (dockVisible()) renderChat();
       updateChatChrome();
     });
   }
@@ -354,9 +352,7 @@
     if (recState && recState.active) cancelRecord();
     state.chat.forEach(m => { if (m.url) URL.revokeObjectURL(m.url); });
     state.chat = [];
-    state.unread = 0;
     inbox.clear();
-    if (!$('#chatPanel').hidden) closeChat();
     setConn(false);
     updateChatChrome();
   }
@@ -823,21 +819,18 @@
   }
 
   function updateChatChrome() {
-    const fab = $('#chatFab');
-    if (!fab) return;
-    fab.hidden = !isDuo();
-    fab.classList.toggle('tab-open', !$('#tabbar').hidden);
-    const badge = $('#chatBadge');
-    if (badge) {
-      badge.hidden = !state.unread;
-      badge.textContent = state.unread > 99 ? '99+' : String(state.unread);
-    }
+    const dock = $('#chatDock');
+    if (!dock) return;
+    const view = activeView();
+    const on = isDuo() && (view === 'wheel' || view === 'truth');
+    dock.hidden = !on;
+    document.body.classList.toggle('dock-open', on);
+    if (on) renderChat();
+
     const who = $('#chatWho');
     if (who) who.textContent = state.partnerName || 'Ta';
     const hint = $('#chatHint');
-    if (hint) hint.textContent = state.connected
-      ? '点对点直连 · 不经过服务器 · 不存档'
-      : 'Ta 掉线了，消息发不出去';
+    if (hint) hint.textContent = state.connected ? '点对点 · 不存档' : 'Ta 掉线了，先等等';
     const dot = $('#connDot3');
     if (dot) {
       dot.classList.toggle('on', state.connected);
@@ -846,23 +839,12 @@
     }
     const send = $('#chatSend');
     if (send) send.disabled = !state.connected;
+    const tools = [$('#chatImg'), $('#chatVid'), $('#chatMic')];
+    tools.forEach(t => { if (t) t.disabled = !state.connected; });
   }
 
-  function openChat() {
-    if (!isDuo()) return;
-    state.chatOpen = true;
-    state.unread = 0;
-    $('#chatPanel').hidden = false;
-    updateChatChrome();
-    renderChat();
-    setTimeout(() => { $('#chatInput').focus(); }, 220);
-  }
-
-  function closeChat() {
-    state.chatOpen = false;
-    $('#chatPanel').hidden = true;
-    if (recState && recState.active) cancelRecord();
-    updateChatChrome();
+  function dockVisible() {
+    return !$('#chatDock').hidden;
   }
 
   function pushMsg(m) {
@@ -1052,9 +1034,8 @@
       m.status = 'fail';
     }
     renderChat();
-    if (!state.chatOpen) {
-      state.unread += 1;
-      updateChatChrome();
+    if (!dockVisible()) {
+      toast(`${msg.fromName || 'Ta'} 发来了一条${msg.kind === 'voice' ? '语音' : msg.kind === 'image' ? '图片' : '视频'}`);
       vibrate(18);
     }
   }
@@ -1181,10 +1162,11 @@
       id: msg.id || chatId(), mine: false, kind: 'text', text,
       at: msg.at || Date.now(), status: 'done', name: msg.fromName || 'Ta',
     });
-    if (state.chatOpen) renderChat();
-    else {
-      state.unread += 1;
-      updateChatChrome();
+    if (dockVisible()) {
+      renderChat();
+      vibrate(14);
+    } else {
+      toast(`${msg.fromName || 'Ta'}：${text.slice(0, 24)}`);
       vibrate(18);
     }
   }
@@ -1378,8 +1360,6 @@
     });
 
     // 聊天
-    $('#chatFab').addEventListener('click', openChat);
-    $('#chatClose').addEventListener('click', closeChat);
     $('#chatSend').addEventListener('click', sendText);
 
     const chatInput = $('#chatInput');
