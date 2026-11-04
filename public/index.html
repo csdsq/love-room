@@ -81,7 +81,7 @@
   <!-- ================= 房间 / 匹配 ================= -->
   <section class="screen" id="screen-room">
     <header class="topbar">
-      <button class="icon-btn" data-nav="home">←</button>
+      <button class="icon-btn" data-nav="back">←</button>
       <span class="topbar-title" id="roomTitle">双人房</span>
       <span class="conn" id="connDot"><i></i><b>未连接</b></span>
     </header>
@@ -91,6 +91,7 @@
       <div class="code-value" id="codeValue">------</div>
       <button class="btn btn-dark" id="copyCode">复制匹配码</button>
       <p class="code-tip" id="codeTip">Ta 在首页选「我有匹配码」，输入即可进入同一个房间</p>
+      <button class="link code-regen" id="regenCode">这个号码被占了？换一个 →</button>
     </div>
 
     <div class="members" id="members"></div>
@@ -117,7 +118,7 @@
   <!-- ================= 模式选择 ================= -->
   <section class="screen" id="screen-mode">
     <header class="topbar">
-      <button class="icon-btn" data-nav="room">←</button>
+      <button class="icon-btn" data-nav="back">←</button>
       <span class="topbar-title">选个玩法</span>
       <span class="conn" id="connDot2"><i></i><b>单人</b></span>
     </header>
@@ -154,7 +155,7 @@
   <!-- ================= 转盘 ================= -->
   <section class="screen" id="screen-wheel">
     <header class="topbar">
-      <button class="icon-btn" data-nav="mode">←</button>
+      <button class="icon-btn" data-nav="back">←</button>
       <span class="topbar-title">转盘</span>
       <span class="points" id="pointsPill">💗 <b>0</b></span>
     </header>
@@ -185,7 +186,7 @@
   <!-- ================= 真心话 / 大冒险 ================= -->
   <section class="screen" id="screen-truth">
     <header class="topbar">
-      <button class="icon-btn" data-nav="mode">←</button>
+      <button class="icon-btn" data-nav="back">←</button>
       <span class="topbar-title">真心话 · 大冒险</span>
       <span class="points" id="pointsPill2">💗 <b>0</b></span>
     </header>
@@ -244,7 +245,7 @@
       <div class="stop-icon">🛑</div>
       <h2>已全部停止</h2>
       <p id="stopWho">有人喊了安全词</p>
-      <p class="stop-sub">先抱一下。喝水、盖被子、说一句真话，然后再决定要不要继续。</p>
+      <p class="stop-sub">先喝口水，说一句真话，把灯打开一半，然后再决定要不要继续。</p>
       <button class="btn btn-primary btn-lg" id="resumeBtn">我们都缓过来了，继续</button>
       <button class="btn btn-ghost" data-nav="mode" id="stopExit">今晚到此为止</button>
     </div>

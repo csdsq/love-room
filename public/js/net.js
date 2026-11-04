@@ -49,8 +49,9 @@
   /* ---------------- 编号 ---------------- */
 
   function randomCode() {
-    let s = '';
-    for (let i = 0; i < 6; i++) s += Math.floor(Math.random() * 10);
+    // 首位不为 0，避免显示成「086912」这种让人以为是失误的号码
+    let s = String(1 + Math.floor(Math.random() * 9));
+    for (let i = 0; i < 5; i++) s += Math.floor(Math.random() * 10);
     return s;
   }
 

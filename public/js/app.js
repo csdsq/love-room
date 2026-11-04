@@ -268,22 +268,35 @@
 
   /* ------------------------------------------------------------------ */
   /* 导航                                                                */
+  /*  navStack 记录来路，「←」永远回到上一页，不会突然跳回首页。         */
   /* ------------------------------------------------------------------ */
   const screenEl = (id) => document.getElementById(`screen-${id}`);
+  const TAB_SCREENS = ['wheel', 'truth', 'safety'];   // 同一层的兄弟页
 
   function go(id, opts = {}) {
     const el = screenEl(id);
     if (!el) return;
+
+    const cur = state.navStack[state.navStack.length - 1];
     $$('.screen').forEach(s => s.classList.remove('active'));
     el.classList.add('active');
     el.scrollTop = 0;
 
-    if (!opts.silent && state.navStack[state.navStack.length - 1] !== id) {
-      state.navStack.push(id);
+    if (!opts.silent && cur !== id) {
+      const at = state.navStack.lastIndexOf(id);
+      if (at >= 0) {
+        // 这一页在来路上出现过：把栈截回去，避免出现「返回要按两次」
+        state.navStack.length = at + 1;
+      } else if (TAB_SCREENS.includes(id) && TAB_SCREENS.includes(cur)) {
+        // 转盘 / 真心话 / 规则 互为兄弟，横向切换时替换栈顶
+        state.navStack[state.navStack.length - 1] = id;
+      } else {
+        state.navStack.push(id);
+      }
+      if (state.navStack.length > 12) state.navStack = state.navStack.slice(-12);
     }
 
-    const tabScreens = ['wheel', 'truth', 'safety'];
-    const showTab = tabScreens.includes(id);
+    const showTab = TAB_SCREENS.includes(id);
     $('#tabbar').hidden = !showTab;
     el.classList.toggle('has-tab', showTab);
     $$('#tabbar button').forEach(b => b.classList.toggle('active', b.dataset.nav === id));
@@ -302,9 +315,25 @@
   }
 
   function back() {
-    state.navStack.pop();
+    const cur = state.navStack[state.navStack.length - 1];
+    if (state.navStack.length > 1) state.navStack.pop();
     const prev = state.navStack[state.navStack.length - 1] || 'home';
+
+    // 从房间退回首页 = 主动散场，把点对点连接也关掉，别留一个空房间挂着
+    if (cur === 'room' && prev === 'home') leaveRoom();
     go(prev, { silent: true });
+  }
+
+  function leaveRoom() {
+    if (window.P2P) { try { P2P.destroy(); } catch {} }
+    state.mode = null;
+    state.role = null;
+    state.code = null;
+    state.connected = false;
+    state.members = [];
+    state.partnerName = null;
+    state.turnName = null;
+    setConn(false);
   }
 
   /* ------------------------------------------------------------------ */
@@ -350,13 +379,14 @@
 
     P2P.host((code) => {
       state.code = code;
-      localStorage.setItem('duo_code', code);
       const el = $('#codeValue');
       if (el) el.textContent = code;
       if (navigator.clipboard) navigator.clipboard.writeText(code).catch(() => {});
       toast('房间开好了，匹配码已复制');
       if (hint) hint.textContent = '等 Ta 进来，两个人一起开始';
-    }, localStorage.getItem('duo_code'));
+    });
+    // 每次开房都用新的随机码，不再复用上一次的号码
+    try { localStorage.removeItem('duo_code'); } catch {}
   }
 
   function joinRoom() {
@@ -400,6 +430,7 @@
     $('#hostName').value = kind === 'host' ? state.name : '';
     $('#hostName').hidden = kind === 'guest';
     $('#copyCode').hidden = kind === 'guest';
+    $('#regenCode').hidden = kind === 'guest';
 
     const steps = $('#roomSteps');
     if (steps) {
@@ -761,9 +792,11 @@
         if (a === 'create') createRoom();
         if (a === 'join') {
           go('room');
+          $('#roomTitle').textContent = '输入匹配码';
           $('#codeCard').hidden = true;
           $('#roomActions').hidden = true;
           $('#joinBox').hidden = false;
+          $('#joinErr').textContent = '';
           setTimeout(() => $('#joinInput').focus(), 260);
         }
         if (a === 'solo') {
@@ -780,7 +813,10 @@
       if (nav) {
         const t = nav.dataset.nav;
         if (t === 'back') back();
-        else if (t === 'home') { location.reload(); }
+        else if (t === 'home') {
+          if (activeView() === 'room') leaveRoom();
+          go('home');
+        }
         else if (t === 'room') {
           if (!isDuo()) return go('mode');
           go('room');
@@ -844,6 +880,16 @@
         document.execCommand('copy'); ta.remove();
         toast('匹配码已复制');
       }
+    });
+
+    // 换一个房间码（只在对方还没进来时可用）
+    $('#regenCode').addEventListener('click', () => {
+      if (state.role !== 'host') return;
+      if (state.connected) return toast('Ta 已经进来了，现在换号会把 Ta 踢掉');
+      try { P2P.destroy(); } catch {}
+      state.code = null;
+      createRoom();
+      toast('换了一个新号码');
     });
 
     $('#joinBtn').addEventListener('click', joinRoom);
