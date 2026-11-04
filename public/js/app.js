@@ -1259,6 +1259,44 @@
   /* 初始化                                                              */
   /* ------------------------------------------------------------------ */
   function init() {
+    // 访问密码：密码固定，30 天内这台设备免输（通行证存 localStorage，类似 cookie）
+    const LOCK_PASS = 'love';
+    const LOCK_KEY = 'duo_lock_until';
+    const LOCK_MS = 30 * 24 * 60 * 60 * 1000;
+
+    const lockPassed = () => {
+      const until = Number(localStorage.getItem(LOCK_KEY) || 0);
+      return until > Date.now();
+    };
+
+    // 通行证有效：跳过密码门和 18+ 确认，直接进
+    if (lockPassed()) {
+      $('#lock').classList.add('hidden');
+      $('#gate').classList.add('hidden');
+      go('home');
+    } else {
+      setTimeout(() => { try { $('#lockInput').focus(); } catch {} }, 320);
+    }
+
+    const tryUnlock = () => {
+      const v = ($('#lockInput').value || '').trim().toLowerCase();
+      if (v === LOCK_PASS) {
+        localStorage.setItem(LOCK_KEY, String(Date.now() + LOCK_MS));
+        $('#lock').classList.add('hidden');
+        // 密码过了还要过一遍 18+ 确认（仅首次）；之后 30 天内再来直达首页
+      } else {
+        $('#lockErr').hidden = false;
+        $('#lockInput').value = '';
+        const box = $('#lockBox');
+        box.classList.remove('shake');
+        void box.offsetWidth;      // 重新触发抖动动画
+        box.classList.add('shake');
+        $('#lockInput').focus();
+      }
+    };
+    $('#lockEnter').addEventListener('click', tryUnlock);
+    $('#lockInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') tryUnlock(); });
+
     // 门禁
     $('#gateEnter').addEventListener('click', () => {
       $('#gate').classList.add('hidden');

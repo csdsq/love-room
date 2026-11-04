@@ -13,6 +13,22 @@
 
 <div id="app">
 
+  <!-- ================= 访问密码（30 天有效期） ================= -->
+  <section class="gate lock" id="lock">
+    <div class="gate-inner">
+      <div class="gate-mark">🔒</div>
+      <h1>双人房</h1>
+      <p class="gate-sub">这里是只属于你们两个人的地方<br/>输对暗号，才能进去</p>
+      <div class="lock-box" id="lockBox">
+        <input type="password" id="lockInput" autocomplete="off" autocapitalize="off"
+               spellcheck="false" placeholder="访问密码" maxlength="20" />
+        <button class="btn btn-primary btn-lg" id="lockEnter">进去</button>
+        <p class="lock-err" id="lockErr" hidden>密码不对，再想想</p>
+      </div>
+      <p class="lock-tip">输对一次，这台设备 30 天内不再询问</p>
+    </div>
+  </section>
+
   <!-- ================= 18+ 门禁 ================= -->
   <section class="gate" id="gate">
     <div class="gate-inner">

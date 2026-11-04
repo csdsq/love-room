@@ -939,3 +939,31 @@ body.dock-full .screen.has-dock { padding-bottom: calc(min(40vh, 340px) + 18px +
   color: var(--muted);
   opacity: 0.9;
 }
+
+/* ---------------- 访问密码 ---------------- */
+.lock { z-index: 96; }
+.lock-box { display: flex; flex-direction: column; gap: 10px; }
+#lockInput {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 13px 16px;
+  border-radius: 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-family: inherit; font-size: 16px;
+  text-align: center; letter-spacing: 0.24em;
+  outline: none;
+}
+#lockInput:focus { border-color: rgba(255, 120, 160, 0.45); }
+#lockInput::placeholder { color: #8d6f7d; letter-spacing: 0.05em; }
+.lock-err { color: #ff8b95; font-size: 12px; margin: 2px 0 0; }
+.lock-tip { color: var(--muted); font-size: 11px; margin-top: 16px; opacity: 0.8; }
+.lock-box.shake { animation: lockShake 0.4s ease; }
+@keyframes lockShake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(7px); }
+  60% { transform: translateX(-5px); }
+  80% { transform: translateX(3px); }
+}
