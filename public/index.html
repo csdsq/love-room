@@ -259,6 +259,55 @@
     <button id="sosBtn" class="sos">🛑<span>安全词</span></button>
   </nav>
 
+  <!-- ================= 聊天浮标 ================= -->
+  <button class="chat-fab" id="chatFab" hidden>
+    💬
+    <i class="chat-badge" id="chatBadge" hidden>0</i>
+  </button>
+
+  <!-- ================= 聊天面板 ================= -->
+  <section class="chat-panel" id="chatPanel" hidden>
+    <header class="chat-head">
+      <button class="icon-btn" id="chatClose">←</button>
+      <div class="chat-who">
+        <b id="chatWho">Ta</b>
+        <span id="chatHint">点对点直连 · 不经过服务器 · 不存档</span>
+      </div>
+      <span class="conn" id="connDot3"><i></i><b>已同步</b></span>
+    </header>
+
+    <div class="chat-list" id="chatList">
+      <div class="chat-empty" id="chatEmpty">
+        <span>💬</span>
+        <p>这里只有你们两个人看得到<br/>消息不落任何服务器，刷新即消失</p>
+      </div>
+    </div>
+
+    <div class="chat-rec" id="recBar" hidden>
+      <span class="rec-dot"></span>
+      <b id="recTime">0:00</b>
+      <span class="rec-tip">正在录音…</span>
+      <button class="btn btn-ghost btn-sm" id="recCancel">取消</button>
+      <button class="btn btn-primary btn-sm" id="recSend">发送</button>
+    </div>
+
+    <div class="chat-compose">
+      <button class="chat-tool" id="chatImg" title="发图片">🖼️</button>
+      <button class="chat-tool" id="chatVid" title="发视频">🎬</button>
+      <button class="chat-tool chat-mic" id="chatMic" title="录语音">🎤</button>
+      <textarea id="chatInput" rows="1" maxlength="500" placeholder="说点什么…"></textarea>
+      <button class="chat-send" id="chatSend">发送</button>
+    </div>
+
+    <input type="file" id="fileImg" accept="image/*" hidden />
+    <input type="file" id="fileVid" accept="video/*" hidden />
+  </section>
+
+  <!-- ================= 图片放大 ================= -->
+  <div class="chat-viewer" id="chatViewer" hidden>
+    <img id="chatViewerImg" alt="" />
+  </div>
+
   <div class="toast" id="toast"></div>
 </div>
 

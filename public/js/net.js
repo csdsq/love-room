@@ -226,6 +226,17 @@
     }
   }
 
+  // 大文件（图片/语音/视频）分片后逐片调用，绕开 PeerJS 自己的分块
+  function sendRaw(payload) {
+    return send(payload);
+  }
+
+  // 发送缓冲区积压字节数，用来做背压：积压太多就先等一会儿
+  function buffered() {
+    const dc = conn && conn.dataChannel;
+    return dc && typeof dc.bufferedAmount === 'number' ? dc.bufferedAmount : 0;
+  }
+
   function destroy() {
     destroyed = true;
     clearTimer();
@@ -240,6 +251,8 @@
     host,
     join,
     send,
+    sendRaw,
+    buffered,
     destroy,
     on(name, fn) { hooks[name] = fn; },
     get connected() { return !!(conn && conn.open); },

@@ -39,6 +39,9 @@
     paused: false,
     turnName: null,
     navStack: [],
+    chat: [],              // 聊天记录只活在内存里
+    chatOpen: false,
+    unread: 0,
   };
 
   /* ------------------------------------------------------------------ */
@@ -118,6 +121,7 @@
 
     P2P.on('open', () => {
       setConn(true);
+      updateChatChrome();
       if (state.role === 'guest') {
         // 报上名号，等房主把进度发过来
         sendRaw({ type: 'hello', uid: state.uid, name: state.name });
@@ -138,6 +142,11 @@
       const hint = $('#waitHint');
       if (hint) hint.textContent = 'Ta 掉线了，刷新页面重新连一次';
       toast('Ta 掉线了，等 Ta 回来');
+      // 传输到一半的文件标记为失败
+      inbox.clear();
+      state.chat.forEach(m => { if (m.status === 'sending' || m.status === 'receiving') m.status = 'fail'; });
+      if (!$('#chatPanel').hidden) renderChat();
+      updateChatChrome();
     });
   }
 
@@ -150,6 +159,7 @@
       const b = el.querySelector('b');
       if (b) b.textContent = on ? (isDuo() ? '已同步' : '单人') : '重连中';
     });
+    updateChatChrome();
   }
 
   function handleEvent(msg) {
@@ -203,6 +213,12 @@
     }
 
     if (msg.from && msg.from === state.uid) return;
+
+    /* 聊天：文字直接显示，图片/语音/视频按分片重组 */
+    if (msg.type === 'chat') return chatReceive(msg);
+    if (msg.type === 'bin-start') return onBinStart(msg);
+    if (msg.type === 'bin-chunk') return onBinChunk(msg);
+    if (msg.type === 'bin-end') return onBinEnd(msg);
 
     switch (msg.type) {
       case 'name':
@@ -303,6 +319,7 @@
 
     if (showTab) setConn(state.connected);
     if (id === 'wheel' || id === 'truth') renderTurn();
+    updateChatChrome();
 
     document.title = id === 'wheel' ? '转盘 · 双人房'
       : id === 'truth' ? '真心话 · 双人房'
@@ -333,7 +350,15 @@
     state.members = [];
     state.partnerName = null;
     state.turnName = null;
+    // 聊天只在这次连接里存在，散场就一起清掉（顺带释放 blob 内存）
+    if (recState && recState.active) cancelRecord();
+    state.chat.forEach(m => { if (m.url) URL.revokeObjectURL(m.url); });
+    state.chat = [];
+    state.unread = 0;
+    inbox.clear();
+    if (!$('#chatPanel').hidden) closeChat();
     setConn(false);
+    updateChatChrome();
   }
 
   /* ------------------------------------------------------------------ */
@@ -353,9 +378,11 @@
     if (!isDuo()) {
       box.innerHTML = `
         <div class="member filled"><div class="avatar">${escapeHtml((self.name || '我').slice(0, 1))}</div><span>${escapeHtml(self.name)}（单人）</span></div>`;
+      updateChatChrome();
       return;
     }
     box.innerHTML = slot({ name: state.name, uid: state.uid }, true) + slot(other, false);
+    updateChatChrome();
   }
 
   function escapeHtml(s) {
@@ -770,6 +797,410 @@
   }
 
   /* ------------------------------------------------------------------ */
+  /* 聊天                                                                */
+  /*  文字 / 语音 / 图片 / 视频 全部走 WebRTC DataChannel 点对点直传，   */
+  /*  不经过任何服务器、不写 localStorage / IndexedDB，关掉页面即消失。  */
+  /* ------------------------------------------------------------------ */
+  const CHUNK = 12000;                    // 每片 12KB，避开 PeerJS 自己的分块
+  const MAX_IMG = 16 * 1024 * 1024;
+  const MAX_VID = 40 * 1024 * 1024;
+  const MAX_REC = 120;                    // 语音最长 120 秒
+  const HIGH_WATER = 1024 * 1024;          // 发送缓冲高水位，超过就等一等
+
+  const inbox = new Map();                 // 正在接收的分片
+  let recState = null;                     // 录音状态
+  let voiceAudio = null;
+
+  const chatId = () => 'c' + Math.random().toString(36).slice(2, 9);
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  function fmtDur(sec) {
+    const s = Math.max(0, Math.round(sec || 0));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+  function fmtClock(ts) {
+    return new Date(ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function updateChatChrome() {
+    const fab = $('#chatFab');
+    if (!fab) return;
+    fab.hidden = !isDuo();
+    fab.classList.toggle('tab-open', !$('#tabbar').hidden);
+    const badge = $('#chatBadge');
+    if (badge) {
+      badge.hidden = !state.unread;
+      badge.textContent = state.unread > 99 ? '99+' : String(state.unread);
+    }
+    const who = $('#chatWho');
+    if (who) who.textContent = state.partnerName || 'Ta';
+    const hint = $('#chatHint');
+    if (hint) hint.textContent = state.connected
+      ? '点对点直连 · 不经过服务器 · 不存档'
+      : 'Ta 掉线了，消息发不出去';
+    const dot = $('#connDot3');
+    if (dot) {
+      dot.classList.toggle('on', state.connected);
+      const b = dot.querySelector('b');
+      if (b) b.textContent = state.connected ? '已同步' : '已断开';
+    }
+    const send = $('#chatSend');
+    if (send) send.disabled = !state.connected;
+  }
+
+  function openChat() {
+    if (!isDuo()) return;
+    state.chatOpen = true;
+    state.unread = 0;
+    $('#chatPanel').hidden = false;
+    updateChatChrome();
+    renderChat();
+    setTimeout(() => { $('#chatInput').focus(); }, 220);
+  }
+
+  function closeChat() {
+    state.chatOpen = false;
+    $('#chatPanel').hidden = true;
+    if (recState && recState.active) cancelRecord();
+    updateChatChrome();
+  }
+
+  function pushMsg(m) {
+    state.chat.push(m);
+    if (state.chat.length > 120) {
+      const gone = state.chat.shift();
+      if (gone && gone.url) URL.revokeObjectURL(gone.url);
+    }
+    return m;
+  }
+
+  function chatEmptyHtml() {
+    return `<div class="chat-empty"><span>💬</span><p>这里只有你们两个人看得到<br/>消息不落任何服务器，刷新即消失</p></div>`;
+  }
+
+  function voiceBars() {
+    const hs = [7, 12, 17, 10, 15, 8, 13];
+    return hs.map(h => `<span style="height:${h}px"></span>`).join('');
+  }
+
+  function awaitBox(m) {
+    const pct = Math.round((m.progress || 0) * 100);
+    const label = m.status === 'fail' ? '<span class="msg-fail">传输中断</span>'
+      : `<div class="msg-progress"><i style="width:${pct}%"></i></div>`;
+    const tip = m.status === 'fail' ? ''
+      : `<span class="msg-time" style="margin-top:6px">${m.mine ? '发送中' : '接收中'} ${pct}%</span>`;
+    return label + tip;
+  }
+
+  function msgHtml(m) {
+    if (m.kind === 'sys') {
+      return `<div class="msg sys" data-mid="${m.id}"><div class="bubble">${escapeHtml(m.text)}</div></div>`;
+    }
+    const mine = m.mine ? ' mine' : '';
+    const name = !m.mine && m.name ? `<span class="msg-name">${escapeHtml(m.name)}</span>` : '';
+    let body = '';
+    const pending = m.status === 'sending' || m.status === 'receiving';
+
+    if (m.kind === 'text') {
+      body = `<div class="bubble">${escapeHtml(m.text)}</div>`;
+    } else if (m.kind === 'image') {
+      body = `<div class="bubble media">${m.url
+        ? `<img src="${m.url}" data-view="${m.url}" alt="图片" />`
+        : awaitBox(m)}</div>`;
+      if (pending && m.url) body = `<div class="bubble media"><img src="${m.url}" alt="图片" />${awaitBox(m)}</div>`;
+    } else if (m.kind === 'video') {
+      body = `<div class="bubble media">${m.url
+        ? `<video src="${m.url}" controls playsinline preload="metadata"></video>`
+        : awaitBox(m)}</div>`;
+      if (pending && m.url) body = `<div class="bubble media"><video src="${m.url}" controls playsinline preload="metadata"></video>${awaitBox(m)}</div>`;
+    } else if (m.kind === 'voice') {
+      body = `<div class="bubble">${m.url
+        ? `<button class="voice" data-voice="${m.url}"><i></i><span class="bars">${voiceBars()}</span><span class="dur">${fmtDur(m.dur)}</span></button>`
+        : awaitBox(m)}</div>`;
+      if (pending && m.url) body = `<div class="bubble"><button class="voice" data-voice="${m.url}"><i></i><span class="bars">${voiceBars()}</span><span class="dur">${fmtDur(m.dur)}</span></button>${awaitBox(m)}</div>`;
+    }
+    return `<div class="msg${mine}" data-mid="${m.id}">${name}${body}<span class="msg-time">${fmtClock(m.at)}</span></div>`;
+  }
+
+  function renderChat() {
+    const list = $('#chatList');
+    if (!list) return;
+    list.innerHTML = state.chat.length ? state.chat.map(msgHtml).join('') : chatEmptyHtml();
+    list.scrollTop = list.scrollHeight;
+  }
+
+  function paintProgress(id) {
+    const m = state.chat.find(x => x.id === id);
+    const el = document.querySelector(`[data-mid="${id}"]`);
+    if (!m || !el) return renderChat();
+    const bar = el.querySelector('.msg-progress i');
+    const pct = Math.round((m.progress || 0) * 100);
+    if (bar) bar.style.width = pct + '%';
+    const tip = el.querySelector('.msg-time:not(:last-child)');
+    if (tip) tip.textContent = `${m.mine ? '发送中' : '接收中'} ${pct}%`;
+  }
+
+  function chatCanSend() {
+    if (!state.connected || !P2P.connected) {
+      toast('Ta 还没连上，等一会儿再发');
+      return false;
+    }
+    return true;
+  }
+
+  function sendText() {
+    const input = $('#chatInput');
+    const text = input.value.trim();
+    if (!text) return;
+    if (!chatCanSend()) return;
+    const m = pushMsg({ id: chatId(), mine: true, kind: 'text', text, at: Date.now(), status: 'done' });
+    P2P.send({ type: 'chat', kind: 'text', id: m.id, text, at: m.at, from: state.uid, fromName: state.name });
+    input.value = '';
+    input.style.height = 'auto';
+    renderChat();
+    vibrate(8);
+  }
+
+  // 分片发送：先发 bin-start 说明元信息，再逐片发，最后 bin-end
+  async function sendBinary(kind, blob, meta = {}) {
+    if (!chatCanSend()) return;
+    const id = chatId();
+    const url = URL.createObjectURL(blob);
+    const m = pushMsg({
+      id, mine: true, kind, url, mime: blob.type || meta.mime || '',
+      dur: meta.dur || 0, at: Date.now(), progress: 0, status: 'sending',
+    });
+    renderChat();
+
+    const buf = await blob.arrayBuffer();
+    const total = Math.max(1, Math.ceil(buf.byteLength / CHUNK));
+
+    P2P.send({
+      type: 'bin-start', id, kind, mime: m.mime, size: buf.byteLength,
+      dur: m.dur, total, at: m.at, from: state.uid, fromName: state.name,
+    });
+
+    for (let i = 0; i < total; i++) {
+      // 背压：缓冲区积压太多就等，避免一次性灌爆
+      let guard = 0;
+      while (P2P.buffered() > HIGH_WATER && guard++ < 400) await sleep(30);
+
+      const slice = buf.slice(i * CHUNK, Math.min(buf.byteLength, (i + 1) * CHUNK));
+      const ok = P2P.sendRaw({ type: 'bin-chunk', id, seq: i, data: slice, from: state.uid });
+      if (!ok) { m.status = 'fail'; renderChat(); return; }
+
+      if (i % 4 === 0 || i === total - 1) {
+        m.progress = (i + 1) / total;
+        paintProgress(id);
+        await sleep(0);
+      }
+      if (!P2P.connected) { m.status = 'fail'; renderChat(); return; }
+    }
+
+    P2P.send({ type: 'bin-end', id, total, from: state.uid });
+    m.progress = 1;
+    m.status = 'done';
+    renderChat();
+  }
+
+  function toBuf(d) {
+    if (!d) return new ArrayBuffer(0);
+    if (d instanceof ArrayBuffer) return d;
+    if (d.buffer instanceof ArrayBuffer) return d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength);
+    return new Uint8Array(d).buffer;
+  }
+
+  function onBinStart(msg) {
+    const meta = {
+      id: msg.id, kind: msg.kind, mime: msg.mime || '',
+      size: msg.size || 0, total: msg.total || 0,
+      dur: msg.dur || 0, parts: new Array(msg.total || 0), got: 0,
+    };
+    inbox.set(msg.id, meta);
+    pushMsg({
+      id: msg.id, mine: false, kind: msg.kind, mime: meta.mime, dur: meta.dur,
+      at: msg.at || Date.now(), progress: 0, status: 'receiving', name: msg.fromName || 'Ta',
+    });
+    renderChat();
+  }
+
+  function onBinChunk(msg) {
+    const meta = inbox.get(msg.id);
+    if (!meta) return;
+    if (!meta.parts[msg.seq]) meta.got++;
+    meta.parts[msg.seq] = toBuf(msg.data);
+    const m = state.chat.find(x => x.id === msg.id);
+    if (m) {
+      m.progress = meta.total ? meta.got / meta.total : 0;
+      paintProgress(msg.id);
+    }
+  }
+
+  function onBinEnd(msg) {
+    const meta = inbox.get(msg.id);
+    if (!meta) return;
+    inbox.delete(msg.id);
+    const m = state.chat.find(x => x.id === msg.id);
+    if (!m) return;
+    try {
+      const blob = new Blob(meta.parts, { type: meta.mime || '' });
+      m.url = URL.createObjectURL(blob);
+      m.progress = 1;
+      m.status = 'done';
+      m.at = m.at;
+    } catch (e) {
+      m.status = 'fail';
+    }
+    renderChat();
+    if (!state.chatOpen) {
+      state.unread += 1;
+      updateChatChrome();
+      vibrate(18);
+    }
+  }
+
+  /* ---------------- 发图 ---------------- */
+
+  async function shrinkImage(file, maxSide = 1280, quality = 0.72) {
+    try {
+      const bmp = await createImageBitmap(file);
+      const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+      const w = Math.max(1, Math.round(bmp.width * scale));
+      const h = Math.max(1, Math.round(bmp.height * scale));
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#100610';
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(bmp, 0, 0, w, h);
+      if (bmp.close) bmp.close();
+      const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', quality));
+      if (blob && blob.size < file.size) return blob;
+    } catch (e) {
+      console.warn('[chat] 压缩失败，发原图', e);
+    }
+    return file;
+  }
+
+  async function pickImage(file) {
+    if (!file) return;
+    if (!chatCanSend()) return;
+    if (file.size > MAX_IMG) return toast('图片太大了（上限 16MB）');
+    toast('正在压缩图片…', 1200);
+    const blob = await shrinkImage(file);
+    await sendBinary('image', blob);
+  }
+
+  async function pickVideo(file) {
+    if (!file) return;
+    if (!chatCanSend()) return;
+    if (file.size > MAX_VID) return toast('视频太大了（上限 40MB），先剪短一点');
+    await sendBinary('video', file);
+  }
+
+  /* ---------------- 录语音 ---------------- */
+
+  function recSupported() {
+    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+  }
+
+  async function startRecord() {
+    if (!chatCanSend()) return;
+    if (!recSupported()) return toast('这个浏览器不支持录音');
+
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      return toast('没有麦克风权限，去浏览器设置里开一下');
+    }
+
+    const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'];
+    const mime = types.find(t => window.MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) || '';
+    let rec;
+    try {
+      rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+    } catch {
+      stream.getTracks().forEach(t => t.stop());
+      return toast('录音启动失败，换个浏览器试试');
+    }
+
+    const chunks = [];
+    rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    rec.onstop = () => stream.getTracks().forEach(t => t.stop());
+    rec.start(250);
+
+    recState = {
+      active: true, rec, chunks, stream, startedAt: Date.now(),
+      mime: rec.mimeType || mime || 'audio/webm', stopped: false,
+    };
+    $('#recBar').hidden = false;
+    $('#chatMic').classList.add('recording');
+    $('#recTime').textContent = '0:00';
+    recState.timer = setInterval(() => {
+      if (!recState) return;
+      const s = (Date.now() - recState.startedAt) / 1000;
+      $('#recTime').textContent = fmtDur(s);
+      if (s >= MAX_REC) stopRecord(true);
+    }, 250);
+    vibrate(14);
+  }
+
+  async function stopRecord(send) {
+    const st = recState;
+    if (!st || !st.active || st.stopped) return;
+    st.stopped = true;
+    clearInterval(st.timer);
+
+    const dur = Math.min(MAX_REC, (Date.now() - st.startedAt) / 1000);
+    await new Promise((resolve) => {
+      st.rec.onstop = () => { st.stream.getTracks().forEach(t => t.stop()); resolve(); };
+      try { st.rec.stop(); } catch { resolve(); }
+    });
+
+    $('#recBar').hidden = true;
+    $('#chatMic').classList.remove('recording');
+    recState = null;
+
+    if (!send) return toast('已取消');
+    const blob = new Blob(st.chunks, { type: st.mime });
+    if (blob.size < 1200 || dur < 0.6) return toast('太短了，再说一句');
+    await sendBinary('voice', blob, { dur: Math.round(dur) });
+  }
+
+  function cancelRecord() {
+    stopRecord(false);
+  }
+
+  /* ---------------- 接收 ---------------- */
+
+  function chatReceive(msg) {
+    const text = String(msg.text || '').slice(0, 500);
+    if (!text) return;
+    pushMsg({
+      id: msg.id || chatId(), mine: false, kind: 'text', text,
+      at: msg.at || Date.now(), status: 'done', name: msg.fromName || 'Ta',
+    });
+    if (state.chatOpen) renderChat();
+    else {
+      state.unread += 1;
+      updateChatChrome();
+      vibrate(18);
+    }
+  }
+
+  function playVoice(url) {
+    if (!url) return;
+    if (voiceAudio && voiceAudio.src === url && !voiceAudio.paused) {
+      voiceAudio.pause();
+      return;
+    }
+    if (voiceAudio) voiceAudio.pause();
+    voiceAudio = new Audio(url);
+    voiceAudio.play().catch(() => toast('这条语音解不开（录音格式不兼容）'));
+  }
+
+  /* ------------------------------------------------------------------ */
   /* 初始化                                                              */
   /* ------------------------------------------------------------------ */
   function init() {
@@ -946,6 +1377,55 @@
       toast('加进你们的卡池了');
     });
 
+    // 聊天
+    $('#chatFab').addEventListener('click', openChat);
+    $('#chatClose').addEventListener('click', closeChat);
+    $('#chatSend').addEventListener('click', sendText);
+
+    const chatInput = $('#chatInput');
+    chatInput.addEventListener('input', () => {
+      chatInput.style.height = 'auto';
+      chatInput.style.height = Math.min(96, chatInput.scrollHeight) + 'px';
+    });
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        sendText();
+      }
+    });
+
+    $('#chatImg').addEventListener('click', () => $('#fileImg').click());
+    $('#chatVid').addEventListener('click', () => $('#fileVid').click());
+    $('#fileImg').addEventListener('change', async (e) => {
+      const f = e.target.files && e.target.files[0];
+      e.target.value = '';
+      await pickImage(f);
+    });
+    $('#fileVid').addEventListener('change', async (e) => {
+      const f = e.target.files && e.target.files[0];
+      e.target.value = '';
+      await pickVideo(f);
+    });
+
+    $('#chatMic').addEventListener('click', () => {
+      if (recState && recState.active) stopRecord(true);
+      else startRecord();
+    });
+    $('#recSend').addEventListener('click', () => stopRecord(true));
+    $('#recCancel').addEventListener('click', () => stopRecord(false));
+
+    $('#chatList').addEventListener('click', (e) => {
+      const img = e.target.closest('[data-view]');
+      if (img) {
+        $('#chatViewerImg').src = img.dataset.view;
+        $('#chatViewer').hidden = false;
+        return;
+      }
+      const voice = e.target.closest('[data-voice]');
+      if (voice) playVoice(voice.dataset.voice);
+    });
+    $('#chatViewer').addEventListener('click', () => { $('#chatViewer').hidden = true; });
+
     // 规则页
     $('#safetyList').innerHTML = CONTENT.safety.map(s =>
       `<div class="safety-item"><strong>${s.t}</strong><p>${s.d}</p></div>`).join('');
@@ -978,6 +1458,7 @@
     if (qt) qt.textContent = quotes[Math.floor(Math.random() * quotes.length)];
 
     wireP2P();
+    updateChatChrome();
   }
 
   window.addEventListener('beforeunload', () => {
