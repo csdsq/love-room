@@ -461,6 +461,8 @@
     // 连接诊断：默认收起，连不上时点开看卡在哪一步
     const dt = $('#diagToggle');
     if (dt) dt.hidden = false;
+    const rb = $('#reconnectBtn');
+    if (rb) rb.hidden = false;
 
     const steps = $('#roomSteps');
     if (steps) {
@@ -1263,27 +1265,92 @@
   /* ------------------------------------------------------------------ */
   /* 连接诊断（连不上时给用户/给我们看的现场信息）                        */
   /* ------------------------------------------------------------------ */
+  const PHASE_TEXT = {
+    idle: '准备中',
+    'peer-opening': '连配对服务（信令）',
+    negotiating: '协商中',
+    waiting: '等 Ta 进来',
+    connected: '已连上',
+    retrying: '重试中',
+    failed: '失败',
+  };
+
+  function agoText(ts) {
+    if (!ts) return '';
+    const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+    if (s < 60) return `${s} 秒前`;
+    if (s < 3600) return `${Math.round(s / 60)} 分钟前`;
+    return `${Math.round(s / 3600)} 小时前`;
+  }
+
+  // 「卡在哪一步」——这一行是整块面板里最该看的东西
+  function phaseText(d) {
+    if (d.phase === 'negotiating') {
+      if (d.remote && d.remote !== '-') return '打洞中（已交换 SDP）';
+      if (d.local === 'offer') return '等对方应答（offer 已发出，answer 没回来）';
+      if (d.local === 'answer') return '应答已发出（等对方开始打洞）';
+      return '协商中（还没交换 SDP）';
+    }
+    return PHASE_TEXT[d.phase] || d.phase || '-';
+  }
+
   function diagText() {
     const P = window.P2P;
     const d = (P && P.diag) || {};
+    const sig = (P && P.signal) || {};
     const servers = (P && P.iceServers) || [];
+
+    const sigHost = sig.host || '0.peerjs.com';
+    const sigPort = sig.port && sig.port !== 443 && sig.port !== 80 ? ':' + sig.port : '';
+    const sigWhere = sigHost + sigPort + (sig.secure === false ? '（非加密）' : '');
+
     const lines = [
       `角色：${state.role || '单人'}`,
       `房间码：${state.code || '-'}`,
-      `信令：${(P && P.peerId) || '未连上'}（0.peerjs.com）`,
+      `信令：${(P && P.peerId) || '未连上'}（${sigWhere}）`,
+      `信令连接：${d.sigState || '-'}${d.sigState === 'open' && d.sigMs ? ' · 首次建链 ' + d.sigMs + 'ms' : ''}${d.sigReconnect ? ' · 自动重连 ' + d.sigReconnect + ' 次' : ''}`,
+      `信令 socket：readyState=${d.wsState == null ? -1 : d.wsState} · peer.open=${!!d.peerOpen} · disconnected=${!!d.peerDisconnected}${d.sigRefresh ? ' · 回前台重刷 ' + d.sigRefresh + ' 次' : ''}`,
+      `页面：${d.visibility || '-'}${d.hiddenMs ? '（上次切走 ' + Math.round(d.hiddenMs / 1000) + ' 秒）' : ''}`,
+      `尝试次数：第 ${d.attempt || 1} 次${state.role === 'guest' && d.maxAttempt > 1 ? ' / 最多 ' + d.maxAttempt + ' 次' : ''}`,
+      `阶段：${phaseText(d)}`,
+      `数据通道：${d.connState === 'none' ? '还没创建' : (d.connOpen ? '已打开' : '已创建，未打开')}`,
+      `协商：本地 ${d.local || '-'} / 远端 ${d.remote || '-'} / ${d.sig || '-'} / 收集 ${d.gather || '-'}`,
       `ICE 状态：${d.ice || 'new'}`,
       `候选数量：本地 ${d.host || 0} / 公网 ${d.srflx || 0} / 中继 ${d.relay || 0}`,
       `实际通路：${d.text || '还没建立'}`,
     ];
+    if (d.sigCheck) lines.push(`信令检查：${d.sigCheck}`);
+    if (state.role === 'guest' && d.target) lines.push(`目标房间：${d.target}`);
     if (servers.length) lines.push('STUN/TURN：' + servers.join(' ｜ '));
-    if (d.ice === 'failed' && P && P.diagHint) lines.push('建议：' + P.diagHint());
+    // 最后一条状态 / 错误永远显示：用户截图过来就能定位
+    if (d.lastStatus) {
+      lines.push(`最后状态：${d.lastStatus}${d.lastStatusAt ? '（' + agoText(d.lastStatusAt) + '）' : ''}`);
+    }
+    lines.push(`最后错误：${d.errType ? `${d.errType} — ${d.errMsg}${d.errAt ? '（' + agoText(d.errAt) + '）' : ''}` : '无'}`);
+    // 只有真的出问题了才给「判断」，房主正常等人时不啰嗦
+    const bad = d.phase === 'failed' || d.ice === 'failed' || !!d.errType;
+    if (!state.connected && bad && P && P.diagHint) lines.push('判断：' + P.diagHint());
     lines.push('浏览器：' + navigator.userAgent.slice(0, 72));
     return lines.join('\n');
   }
 
+  let diagTimer = null;
+
   function refreshDiag() {
     const box = $('#diagBox');
     if (box && !box.hidden) box.textContent = diagText();
+  }
+
+  // 面板打开时每秒刷新：ICE / 信令 / 重试次数这些现场一直在变，静态一份会看错
+  function setDiagOpen(open) {
+    const box = $('#diagBox');
+    if (!box) return;
+    box.hidden = !open;
+    if (diagTimer) { clearInterval(diagTimer); diagTimer = null; }
+    if (!open) return;
+    box.textContent = diagText();
+    box.scrollTop = 0;
+    diagTimer = setInterval(refreshDiag, 1000);
   }
 
   /* ------------------------------------------------------------------ */
@@ -1426,8 +1493,25 @@
     // 连接诊断面板
     $('#diagToggle').addEventListener('click', () => {
       const box = $('#diagBox');
-      box.hidden = !box.hidden;
-      if (!box.hidden) { box.textContent = diagText(); box.scrollTop = 0; }
+      setDiagOpen(!!box.hidden);
+    });
+
+    // 手动重连：连不上/掉线时不用刷新整页
+    $('#reconnectBtn').addEventListener('click', () => {
+      if (state.connected) return toast('已经连上了');
+      if (!state.role) return toast('先开一间房或输匹配码');
+      setConn(false);
+      const hint = $('#waitHint');
+      if (hint) {
+        hint.textContent = state.role === 'host' ? '正在重新开房…' : '正在重新连接 Ta 的房间…';
+      }
+      toast('重新连接…', 1500);
+      try {
+        P2P.reconnect();
+      } catch (e) {
+        toast('重连失败：' + ((e && e.message) || '未知错误'), 4200);
+      }
+      refreshDiag();
     });
 
     // 房间动作

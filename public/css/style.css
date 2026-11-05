@@ -969,6 +969,14 @@ body.dock-full .screen.has-dock { padding-bottom: calc(min(40vh, 340px) + 18px +
 }
 
 /* ---------------- 连接诊断（房间页，排查连不上用） ---------------- */
+.diag-actions {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 14px 0 0;
+}
 .diag-toggle {
   display: block;
   margin: 14px auto 0;
@@ -980,6 +988,8 @@ body.dock-full .screen.has-dock { padding-bottom: calc(min(40vh, 340px) + 18px +
   cursor: pointer;
   padding: 4px 6px;
 }
+.diag-actions .diag-toggle { margin: 0; }
+.diag-toggle[hidden] { display: none; }
 .diag-box {
   margin: 10px 0 0;
   padding: 12px 14px;
@@ -991,8 +1001,10 @@ body.dock-full .screen.has-dock { padding-bottom: calc(min(40vh, 340px) + 18px +
   font-size: 11px;
   line-height: 1.75;
   white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 190px;
+  /* 只在单词边界折行，别把 peerjs、complet|e 这种词拆两半 */
+  word-break: normal;
+  overflow-wrap: anywhere;
+  max-height: 320px;
   overflow-y: auto;
 }
 .diag-box[hidden] { display: none; }

@@ -128,7 +128,10 @@
       <input class="text-input" id="hostName" maxlength="8" placeholder="你的昵称（Ta 会看到）" />
       <button class="btn btn-primary btn-lg" id="startPlay">开始今晚</button>
       <p class="hint" id="waitHint">等 Ta 进来，两个人一起开始</p>
-      <button class="link-btn diag-toggle" id="diagToggle" hidden>连不上？看连接诊断</button>
+      <div class="diag-actions">
+        <button class="link-btn diag-toggle" id="reconnectBtn" hidden>重新连接</button>
+        <button class="link-btn diag-toggle" id="diagToggle" hidden>连不上？看连接诊断</button>
+      </div>
       <pre class="diag-box" id="diagBox" hidden></pre>
     </div>
   </section>
