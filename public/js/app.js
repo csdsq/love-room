@@ -108,6 +108,7 @@
   // 把 P2P 的四个事件接到 UI 上
   function wireP2P() {
     P2P.on('status', (text, kind) => {
+      refreshDiag();
       const hint = $('#waitHint');
       if (kind === 'error') {
         toast(text, 4200);
@@ -456,6 +457,10 @@
     $('#hostName').hidden = kind === 'guest';
     $('#copyCode').hidden = kind === 'guest';
     $('#regenCode').hidden = kind === 'guest';
+
+    // 连接诊断：默认收起，连不上时点开看卡在哪一步
+    const dt = $('#diagToggle');
+    if (dt) dt.hidden = false;
 
     const steps = $('#roomSteps');
     if (steps) {
@@ -1256,6 +1261,32 @@
   }
 
   /* ------------------------------------------------------------------ */
+  /* 连接诊断（连不上时给用户/给我们看的现场信息）                        */
+  /* ------------------------------------------------------------------ */
+  function diagText() {
+    const P = window.P2P;
+    const d = (P && P.diag) || {};
+    const servers = (P && P.iceServers) || [];
+    const lines = [
+      `角色：${state.role || '单人'}`,
+      `房间码：${state.code || '-'}`,
+      `信令：${(P && P.peerId) || '未连上'}（0.peerjs.com）`,
+      `ICE 状态：${d.ice || 'new'}`,
+      `候选数量：本地 ${d.host || 0} / 公网 ${d.srflx || 0} / 中继 ${d.relay || 0}`,
+      `实际通路：${d.text || '还没建立'}`,
+    ];
+    if (servers.length) lines.push('STUN/TURN：' + servers.join(' ｜ '));
+    if (d.ice === 'failed' && P && P.diagHint) lines.push('建议：' + P.diagHint());
+    lines.push('浏览器：' + navigator.userAgent.slice(0, 72));
+    return lines.join('\n');
+  }
+
+  function refreshDiag() {
+    const box = $('#diagBox');
+    if (box && !box.hidden) box.textContent = diagText();
+  }
+
+  /* ------------------------------------------------------------------ */
   /* 初始化                                                              */
   /* ------------------------------------------------------------------ */
   function init() {
@@ -1390,6 +1421,13 @@
     $('#spinBtn').addEventListener('click', () => {
       if (state.spinning) return;
       spinWheel({});
+    });
+
+    // 连接诊断面板
+    $('#diagToggle').addEventListener('click', () => {
+      const box = $('#diagBox');
+      box.hidden = !box.hidden;
+      if (!box.hidden) { box.textContent = diagText(); box.scrollTop = 0; }
     });
 
     // 房间动作

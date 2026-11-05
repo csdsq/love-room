@@ -117,6 +117,16 @@ token 从这个环境变量读，不写进任何文件。
 
 ## 技术说明
 
+### 网络连通性（为什么"同一个 WiFi 能连、都用流量就连不上"）
+
+PeerJS 默认只带 Google 的 STUN（`stun.l.google.com`），在国内运营商网络下经常拿不到响应 → 收集不到公网映射地址 → 打洞失败。本项目已在 `public/js/net.js` 的 `ICE_SERVERS` 里换成一组国内可达的 STUN（小米 / B 站 / 芒果 TV / Cloudflare），并把 PeerJS 内置的 `*.turn.peerjs.com`（已无法解析）覆盖掉。
+
+- **同一个 WiFi**：靠 host 候选直连，不依赖 STUN，永远可用。
+- **两端不同网络（流量↔流量、流量↔WiFi）**：靠 STUN 打洞。多数家庭宽带 + 部分运营商可通。
+- **两端都在运营商 CGNAT 后面（对称 NAT）**：打洞在原理上不可能，必须有 TURN 中继。把 TURN 填到 `TURN_SERVERS` 数组即可启用，届时诊断面板会显示「中继转发」。
+
+排查入口：房间页「连不上？看连接诊断」，显示 ICE 状态、各类候选数量、实际通路和当前生效的 STUN/TURN 列表。
+
 ```
 public/
 ├── index.html                所有页面（单页切换）
