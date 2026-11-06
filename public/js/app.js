@@ -1413,6 +1413,8 @@
         const a = tile.dataset.action;
         if (a === 'create') createRoom();
         if (a === 'join') {
+          // 用户还在输码，先把信令连接预热好，省掉点「进入」后的建链时间
+          if (window.P2P) { try { P2P.warm(); } catch {} }
           go('room');
           $('#roomTitle').textContent = '输入匹配码';
           $('#codeCard').hidden = true;

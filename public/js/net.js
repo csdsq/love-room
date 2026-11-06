@@ -13,22 +13,22 @@
 
   /* 重试策略：连不上时不要静默卡住，要么退避重试，要么把原因说清楚 */
   const GUEST_MAX_RETRY = 2;                     // 客人拨号失败最多再试 2 次（共 3 轮）
-  const GUEST_RETRY_DELAY = [1200, 3000];        // 每一轮重试前等多久
+  const GUEST_RETRY_DELAY = [600, 1500];         // 每一轮重试前等多久（原来 1.2s/3s，太磨叽）
   const HOST_MAX_RETRY = 4;                      // 房主号码被占最多换几次号
   const SIG_RECONNECT_MAX = 5;                   // 信令断线自动重连次数
   const SIG_RECONNECT_DELAY = 1000;              // 重连退避基数：1s / 2s / 4s / 8s / 16s
   const ID_RETRY_MAX = 3;                        // 恢复时原号码还占着，原地再试几次（保住号码）
   const HIDDEN_REFRESH_MIN = 1000;               // 切走超过 1 秒，回到前台就重刷一次信令
-  const REFRESH_THROTTLE = 1500;                 // 两次主动重刷之间的最小间隔
+  const REFRESH_THROTTLE = 700;                  // 两次主动重刷之间的最小间隔
 
   /* 「房主切去微信发码、切回来」是真实主路径：Android 会冻结页面，
      WebSocket 可能半死（TCP 还在、但一个包都不再进来）。实测 PeerJS 公共云
      既不主动下发心跳、也不回任何探测帧（HEARTBEAT/PING 全无响应，发错帧还会
      被服务端直接断开），所以本地无法通过「安静多久」判断死活 ——
      只能回到前台时主动把信令重新注册一遍（P2P 数据通道走另一条传输，不受影响）。*/
-  const GUEST_LONG_WAIT = 8000;                  // 慢速等待间隔
-  const GUEST_LONG_MAX = 5;                      // 慢速最多再等 5 轮（约 40 秒）
-  const ANSWER_WAIT = 9000;                      // offer 发出去多久没等到 answer 就重拨
+  const GUEST_LONG_WAIT = 6000;                  // 慢速等待间隔
+  const GUEST_LONG_MAX = 6;                      // 慢速最多再等 6 轮（约 38 秒）
+  const ANSWER_WAIT = 3500;                      // offer 发出去多久没等到 answer 就重拨
 
   /* ------------------------------------------------------------------ */
   /*  信令服务器                                                         */
@@ -167,6 +167,9 @@
   let hiddenAt = 0;                  // 页面切到后台的时间点
   let lastHiddenMs = 0;              // 上次在后台待了多久
   let lastRefreshAt = 0;             // 上次主动重刷信令的时间
+  let warmPeer = null;               // 预热好的信令连接（用户还在输码时就建好）
+  let warmAt = 0;                    // 预热开始的时间点
+  let warmMs = 0;                    // 预热连接实际建链耗时
 
   const hooks = {
     open: null,      // (peerId) => {}           通道打开
@@ -240,6 +243,7 @@
     // 信令（到 PeerServer 的 WebSocket）
     sigState: 'idle',      // idle | opening | open | closed
     sigMs: 0,              // 从 new Peer() 到 open 的耗时
+    warmMs: 0,             // 预热连接本身的建链耗时（不打进用户等待）
     sigStartAt: 0,
     sigReconnect: 0,       // 信令自动重连了几次
     sigRefresh: 0,         // 「回到前台 / 网络恢复」时主动重刷了几次
@@ -647,6 +651,7 @@
   // preferred：上次用过的房间码（刷新后想复用）；被占用就自动换新的
   function host(onReady, preferred, attempt = 0) {
     teardown();
+    destroyWarm();
     role = 'host';
     destroyed = false;
     if (onReady) onReadyHost = onReady;
@@ -751,6 +756,63 @@
     });
   }
 
+  /* ------------------------------------------------------------------ */
+  /*  信令预热                                                           */
+  /*  用户还在输 6 位码的时候，先把到配对服务的 WebSocket 建好。         */
+  /*  实测这一步要 0.8~1.4 秒（TLS + 注册），提前做完，点「进入」时就     */
+  /*  只剩 offer/answer 和 ICE，能明显缩短「等另一个人进来」的时间。      */
+  /* ------------------------------------------------------------------ */
+
+  function warm() {
+    if (warmPeer && !warmPeer.destroyed) return;
+    if (conn && conn.open) return;
+    // 正在房间里（房主等客 / 已经连上）就别再建一条信令
+    if (peer && !peer.destroyed && !peer.disconnected) return;
+
+    warmAt = Date.now();
+    warmMs = 0;
+    let p;
+    try {
+      p = new Peer(peerOptions());
+    } catch (e) {
+      warmPeer = null;
+      return;
+    }
+    warmPeer = p;
+    p.on('open', () => { warmMs = Date.now() - warmAt; });
+    const drop = () => { if (warmPeer === p) warmPeer = null; };
+    p.on('close', drop);
+    // 注意：join() 可能已经把这个 peer 接管走了。只有它还属于预热池时才自动销毁，
+    // 否则会把正在用的连接误杀（peer-unavailable 这类错误要交给 join 自己重试）。
+    p.on('disconnected', () => {
+      if (warmPeer !== p) return;
+      drop();
+      try { p.destroy(); } catch (e) { /* 忽略 */ }
+    });
+    p.on('error', () => {
+      if (warmPeer !== p) return;
+      drop();
+      try { p.destroy(); } catch (e) { /* 忽略 */ }
+    });
+  }
+
+  function takeWarmPeer() {
+    const p = warmPeer;
+    warmPeer = null;
+    // 放太久（>60s）的连接可能已经半死，别复用，重建更稳
+    if (!p || p.destroyed || p.disconnected || Date.now() - warmAt > 60000) {
+      try { p && p.destroy(); } catch (e) { /* 忽略 */ }
+      return null;
+    }
+    return p;
+  }
+
+  function destroyWarm() {
+    const p = warmPeer;
+    warmPeer = null;
+    if (p) { try { p.destroy(); } catch (e) { /* 忽略 */ } }
+  }
+
   // 客人：敲房主的门
   function join(roomCode, onReady, attempt = 0) {
     teardown();
@@ -769,8 +831,17 @@
     code = String(roomCode || '').replace(/\D/g, '').slice(0, 6);
     diag.target = ID_PREFIX + code;
 
-    const p = new Peer(peerOptions());
+    const warmed = takeWarmPeer();
+    const p = warmed || new Peer(peerOptions());
     peer = p;
+    if (warmed) {
+      // 复用预热连接：信令建链时间算在预热上，这里不再重复等
+      diag.warmMs = warmMs;
+      if (p.open) {
+        diag.sigState = 'open';
+        if (!diag.sigMs) diag.sigMs = 1;   // 预热已建好，点进来就是通的
+      }
+    }
     status(attempt === 0 ? '正在连接 Ta 的房间…' : '没连上，正在重试（第 ' + (attempt + 1) + ' 次）…');
 
     timeoutId = setTimeout(() => {
@@ -782,34 +853,38 @@
       fail(diagHint());
     }, HANDSHAKE_TIMEOUT);
 
+    let dialed = false;
+    function dial(first) {
+      if (!first || dialed) return;
+      dialed = true;
+      setPhase('negotiating');
+      status('配对服务已连上，正在拨 Ta 的房间…');
+      const c = p.connect(diag.target, { reliable: true });
+      if (!c) return fail('无法建立数据通道（浏览器拒绝了连接）');
+      bind(c, onReadyGuest, my);
+
+      // offer 发出去之后等 answer：等不到就别干等 25 秒 ——
+      // 对方页面可能被冻结（切微信），早一点重拨反而更快连上
+      clearAnswerTimer();
+      answerTimer = setTimeout(() => {
+        if (my !== epoch || destroyed) return;
+        const pc = c.peerConnection;
+        if (c.open || (pc && pc.remoteDescription)) return;
+        noteError('no-answer', 'offer 发出 ' + (ANSWER_WAIT / 1000) + ' 秒没收到应答');
+        diag.attempt = attempt + 2;
+        if (attempt < GUEST_MAX_RETRY + GUEST_LONG_MAX) return retryJoin(attempt + 1);
+        fail(diagHint());
+      }, ANSWER_WAIT);
+    }
+
     watchSignal(p, my, {
       // 客人每次整轮重来（重建 peer 才能重新走一遍候选收集），
       // 所以信令断了也直接交给 retryJoin，不做原地重连。
       autoReconnect: false,
-      onOpen(first) {
-        if (!first) return;
-        setPhase('negotiating');
-        status('配对服务已连上，正在拨 Ta 的房间…');
-        const c = p.connect(diag.target, { reliable: true });
-        if (!c) return fail('无法建立数据通道（浏览器拒绝了连接）');
-        bind(c, onReadyGuest, my);
-
-        // offer 发出去之后等 answer：等不到就别干等 25 秒 ——
-        // 对方页面可能被冻结（切微信），早一点重拨反而更快连上
-        clearAnswerTimer();
-        answerTimer = setTimeout(() => {
-          if (my !== epoch || destroyed) return;
-          const pc = c.peerConnection;
-          if (c.open || (pc && pc.remoteDescription)) return;
-          noteError('no-answer', 'offer 发出 ' + (ANSWER_WAIT / 1000) + ' 秒没收到应答');
-          diag.attempt = attempt + 2;
-          if (attempt < GUEST_MAX_RETRY + GUEST_LONG_MAX) return retryJoin(attempt + 1);
-          fail(diagHint());
-        }, ANSWER_WAIT);
-      },
+      onOpen: dial,
       onError(type, err) {
         if (type === 'peer-unavailable') {
-          // 对方可能只是在切微信/重建房间号：先快重试，再慢速等一分钟
+          // 对方可能只是在切微信/重建房间号：先快重试，再慢速等半分钟
           if (attempt < GUEST_MAX_RETRY + GUEST_LONG_MAX) {
             return retryJoin(attempt + 1);
           }
@@ -830,10 +905,13 @@
         console.warn('[p2p] guest error', err);
       },
     });
+
+    // 预热连接可能已经 open，watchSignal 的 open 事件不会再触发，这里补一刀
+    if (p.open && !p.disconnected) dial(true);
   }
 
   // 整轮重试：先彻底销毁旧 peer（避免旧回调跑到新一轮里），隔一会儿再来
-  // 前两轮快重试；之后转成每 8 秒一次的慢速等待 —— 房主很可能正切在微信里，
+  // 前两轮快重试；之后转成每 6 秒一次的慢速等待 —— 房主很可能正切在微信里，
   // 一回到页面就会重新注册，下一次重试就能连上。
   function retryJoin(n) {
     const fast = n <= GUEST_MAX_RETRY;
@@ -961,6 +1039,9 @@
   function destroy() {
     destroyed = true;
     teardown();
+    destroyWarm();
+    role = null;
+    code = '';
     setPhase('idle');
   }
 
@@ -992,6 +1073,8 @@
   window.P2P = {
     host,
     join,
+    warm,
+    destroyWarm,
     send,
     sendRaw,
     buffered,
@@ -1029,6 +1112,7 @@
         pcState: '-',
         sigState: peer ? diag.sigState : 'idle',
         sigMs: diag.sigMs,
+        warmMs: diag.warmMs,
         sigReconnect: diag.sigReconnect,
         sigRefresh: diag.sigRefresh,
         sigCheck: diag.sigCheck,
