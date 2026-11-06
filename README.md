@@ -99,7 +99,7 @@ PORT=8080 node server.js  # 换端口
 - DNS：Cloudflare 上 `love` → CNAME → `csdsq.github.io`（DNS only，证书走 GitHub）
 
 > **唯一生效路径是 GitHub Pages。** 仓库里的 `deploy/` 是早期 ECS（nginx + systemd）方案，
-> 已停用，不要再执行；保留仅作历史参考，说明见 `deploy/DEPRECATED.md`。
+> 已停用，不要再执行；保留仅作历史参考，完整说明见根目录 `DEPLOY.md`。
 
 ### 如果 `git push` 推不上去
 
