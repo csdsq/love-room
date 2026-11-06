@@ -98,6 +98,9 @@ PORT=8080 node server.js  # 换端口
 - 站点：`https://love.hser.ren`（Pages 自定义域名，已强制 HTTPS）
 - DNS：Cloudflare 上 `love` → CNAME → `csdsq.github.io`（DNS only，证书走 GitHub）
 
+> **唯一生效路径是 GitHub Pages。** 仓库里的 `deploy/` 是早期 ECS（nginx + systemd）方案，
+> 已停用，不要再执行；保留仅作历史参考，说明见 `deploy/DEPRECATED.md`。
+
 ### 如果 `git push` 推不上去
 
 有些网络里 git 的 HTTPS POST 会被代理掐断（`CONNECT tunnel failed, response 502`），
@@ -119,11 +122,11 @@ token 从这个环境变量读，不写进任何文件。
 
 ### 网络连通性（为什么"同一个 WiFi 能连、都用流量就连不上"）
 
-PeerJS 默认只带 Google 的 STUN（`stun.l.google.com`），在国内运营商网络下经常拿不到响应 → 收集不到公网映射地址 → 打洞失败。本项目已在 `public/js/net.js` 的 `ICE_SERVERS` 里换成一组国内可达的 STUN（小米 / B 站 / 芒果 TV / Cloudflare），并把 PeerJS 内置的 `*.turn.peerjs.com`（已无法解析）覆盖掉。
+PeerJS 默认只带 Google 的 STUN（`stun.l.google.com`），在国内运营商网络下经常拿不到响应 → 收集不到公网映射地址 → 打洞失败。本项目已在 `public/js/net.js` 的 `ICE_SERVERS` 里换成一组国内可达的 STUN（小米 / B 站 / 芒果 TV / Cloudflare），并把 PeerJS 内置的 `*.turn.peerjs.com`（已无法解析）覆盖掉；同时在 `TURN_SERVERS` 里接了自建 coturn（`8.149.139.66:3478`，仅打洞失败时使用）。
 
 - **同一个 WiFi**：靠 host 候选直连，不依赖 STUN，永远可用。
 - **两端不同网络（流量↔流量、流量↔WiFi）**：靠 STUN 打洞。多数家庭宽带 + 部分运营商可通。
-- **两端都在运营商 CGNAT 后面（对称 NAT）**：打洞在原理上不可能，必须有 TURN 中继。把 TURN 填到 `TURN_SERVERS` 数组即可启用，届时诊断面板会显示「中继转发」。
+- **两端都在运营商 CGNAT 后面（对称 NAT）**：打洞在原理上不可能，必须有 TURN 中继。`TURN_SERVERS` 已配置自建 coturn（`turn:8.149.139.66:3478`，UDP/TCP），打洞失败时自动降级为中继，诊断面板会显示「中继转发」。
 
 排查入口：房间页「连不上？看连接诊断」，显示 ICE 状态、各类候选数量、实际通路和当前生效的 STUN/TURN 列表。
 
@@ -134,7 +137,7 @@ public/
 ├── js/
 │   ├── vendor/peerjs.min.js  点对点连接库（本地内置，不依赖 CDN）
 │   ├── net.js                WebRTC 传输层：开房 / 加入 / 心跳 / 断线检测
-│   ├── data.js               内容库：4 主题 × 38 扇区、80 张卡、6 条安全规则
+│   ├── data.js               内容库：4 主题 × 10 扇区（共 40）、128 张卡（4 档 × 32）、11 条安全规则
 │   └── app.js                状态机 + 同步协议 + Canvas 转盘
 └── robots.txt
 ```
@@ -153,7 +156,7 @@ public/
 
 - **必须两个人同时在线**：这是点对点，没有服务器帮忙存消息，一方关掉页面另一边就没法推进
 - **依赖公共信令服务器**（`0.peerjs.com`）：它挂了就开不了新房，已经连上的不受影响。要更稳可以自建 [PeerServer](https://github.com/peers/peerjs-server) 然后改 `net.js` 里的 `Peer` 配置
-- **极端网络可能连不上**：双方都在严格的对称 NAT 后面时，WebRTC 需要 TURN 中转，公共 STUN 打不通。家用宽带和 4G/5G 一般没问题
+- **极端网络走中继**：双方都在严格的对称 NAT / CGNAT 后面时，STUN 打洞不可能成功，会自动走自建 TURN。中继带宽受 ECS 出口带宽限制，传大视频会比直连慢
 - **房间码是 6 位数字**：方便口头/文字传递，但理论上存在撞号（撞了会自动换一个）
 
 ---

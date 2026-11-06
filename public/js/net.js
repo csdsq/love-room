@@ -105,9 +105,20 @@
     { urls: ['stun:stun.l.google.com:19302'] },
   ];
 
-  // 需要中继时在这里填 TURN（形如 { urls: 'turn:turn.example.com:3478', username, credential }）
-  // 两端都在运营商 CGNAT 后面时，只有 TURN 能连通。
-  const TURN_SERVERS = [];
+  // 自建 coturn（8.149.139.66，与 hser.ren 同一台 ECS）。
+  // 只在两端都打洞失败（对称 NAT / CGNAT）时才会走中继，正常情况下仍是直连。
+  // 纯静态站没有下发临时凭据的后端，所以这里用静态凭据；
+  // 服务端已限制单用户并发 3 路、总并发 30 路、单路上限 2Mbps。
+  const TURN_SERVERS = [
+    {
+      urls: [
+        'turn:8.149.139.66:3478?transport=udp',
+        'turn:8.149.139.66:3478?transport=tcp',
+      ],
+      username: 'lr6clw9a',
+      credential: 'kDqJO3Wb02igz0mtAOwUutGxk37y',
+    },
+  ];
 
   function peerOptions(extra = {}) {
     return Object.assign({
