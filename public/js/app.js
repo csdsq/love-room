@@ -31,6 +31,7 @@
     turns: 0,
     spinning: false,
     connected: false,
+    peerAway: false,       // 对方暂时不在（切到别的应用），连接仍在
     es: null,
     custom: loadCustom(),
     lastCardKey: null,
@@ -120,6 +121,7 @@
     });
 
     P2P.on('open', () => {
+      state.peerAway = false;
       setConn(true);
       updateChatChrome();
       if (state.role === 'guest') {
@@ -130,7 +132,32 @@
 
     P2P.on('message', (msg) => handleEvent(msg));
 
+    /* 对方切到微信/别的应用去了，连接还在 —— 什么都不拆，只把界面降级。
+       聊天记录、正在传的文件、玩法进度全部保留。 */
+    P2P.on('away', () => {
+      state.peerAway = true;
+      renderConnLabel();
+      const other = state.members.find(m => m.uid !== state.uid);
+      if (other) { other.online = false; renderMembers(); }
+      const hint = $('#waitHint');
+      if (hint && state.connected) hint.textContent = 'Ta 暂时不在（可能切到别的应用了），连接留着，回来就接着用';
+    });
+
+    /* 对方回来了：连接从来没断过，直接把状态复原 */
+    P2P.on('back', (awayMs) => {
+      state.peerAway = false;
+      renderConnLabel();
+      const other = state.members.find(m => m.uid !== state.uid);
+      if (other) { other.online = true; renderMembers(); }
+      const hint = $('#waitHint');
+      if (hint && state.partnerName) hint.textContent = `${state.partnerName} 已就位，可以开始了`;
+      if (awayMs > 8000) toast('Ta 回来了');
+    });
+
+    /* 只有这条才是真的「走了」：对方关了页面，或者通道 3 分钟都没拉起来。
+       所以文案不能说「刷新页面重连」，而是引导点「重新连接」。 */
     P2P.on('close', () => {
+      state.peerAway = false;
       setConn(false);
       const other = state.members.find(m => m.uid !== state.uid);
       if (other) other.online = false;
@@ -140,8 +167,8 @@
       const start = $('#startPlay');
       if (start) start.disabled = true;
       const hint = $('#waitHint');
-      if (hint) hint.textContent = 'Ta 掉线了，刷新页面重新连一次';
-      toast('Ta 掉线了，等 Ta 回来');
+      if (hint) hint.textContent = 'Ta 关掉页面了。可以把号码再发一次让 Ta 进来，或点「重新连接」';
+      toast('Ta 离开页面了');
       // 传输到一半的文件标记为失败
       inbox.clear();
       state.chat.forEach(m => { if (m.status === 'sending' || m.status === 'receiving') m.status = 'fail'; });
@@ -150,15 +177,25 @@
     });
   }
 
-  function setConn(on) {
-    state.connected = on;
+  // 连接状态标签：已同步 / Ta 不在 / 重连中
+  function renderConnLabel() {
+    const text = !state.connected
+      ? '重连中'
+      : (state.peerAway ? 'Ta 不在' : (isDuo() ? '已同步' : '单人'));
     ['#connDot', '#connDot2'].forEach(sel => {
       const el = $(sel);
       if (!el) return;
-      el.classList.toggle('on', on);
+      el.classList.toggle('on', state.connected);
+      el.classList.toggle('away', state.connected && state.peerAway);
       const b = el.querySelector('b');
-      if (b) b.textContent = on ? (isDuo() ? '已同步' : '单人') : '重连中';
+      if (b) b.textContent = text;
     });
+  }
+
+  function setConn(on) {
+    state.connected = on;
+    if (!on) state.peerAway = false;
+    renderConnLabel();
     updateChatChrome();
   }
 
@@ -339,7 +376,8 @@
   }
 
   function leaveRoom() {
-    if (window.P2P) { try { P2P.destroy(); } catch {} }
+    // 主动退场：连接关掉，房间记号也忘掉（下次打开不再自动回来）
+    if (window.P2P) { try { P2P.leave ? P2P.leave() : P2P.destroy(); } catch {} }
     state.mode = null;
     state.role = null;
     state.code = null;
@@ -441,6 +479,41 @@
     P2P.join(code, () => {
       toast('连上了，等 Ta 把进度发过来');
     });
+  }
+
+  /* 页面被系统回收（切后台太久 / 内存紧张）后重新打开：直接回到上次的房间，
+     不用重新输 6 位码。sessionStorage 只活在当前标签页，所以「关掉标签页」
+     就等于真的退出，不会被这里拉回来。 */
+  function resumeSavedRoom(saved) {
+    if (!saved || !saved.code) return false;
+    const name = localStorage.getItem('duo_name') || '我';
+    const hint = $('#waitHint');
+
+    if (saved.role === 'host') {
+      state.mode = 'host'; state.role = 'host'; state.name = name;
+      state.uid = newUid(); state.turnName = name; state.code = saved.code;
+      state.members = [{ uid: state.uid, name, role: 'host', online: true }];
+      setupRoomScreen('host');
+      go('room');
+      if (hint) hint.textContent = '正在回到上次的房间…';
+      P2P.host((c) => {
+        state.code = c;
+        const el = $('#codeValue');
+        if (el) el.textContent = c;
+        if (hint) hint.textContent = '等 Ta 进来，两个人一起开始';
+        toast('已回到上次的房间');
+      }, saved.code);
+      return true;
+    }
+
+    state.mode = 'guest'; state.role = 'guest'; state.name = name;
+    state.code = saved.code; state.uid = newUid();
+    state.members = [{ uid: state.uid, name, role: 'guest', online: true }];
+    setupRoomScreen('guest');
+    go('room');
+    if (hint) hint.textContent = '正在回到上次的房间…';
+    P2P.join(saved.code, () => { toast('已回到上次的房间'); });
+    return true;
   }
 
   function setupRoomScreen(kind) {
@@ -847,14 +920,16 @@
     const hint = $('#chatHint');
     if (hint) {
       if (!state.connected) hint.textContent = 'Ta 掉线了，先等等';
+      else if (state.peerAway) hint.textContent = 'Ta 暂时不在，现在发的消息等 Ta 回来会收到';
       else if (dockFolded()) hint.textContent = state.unread ? `${state.unread} 条新消息` : '点开看聊天';
       else hint.textContent = '点对点 · 不存档';
     }
     const dot = $('#connDot3');
     if (dot) {
       dot.classList.toggle('on', state.connected);
+      dot.classList.toggle('away', state.connected && state.peerAway);
       const b = dot.querySelector('b');
-      if (b) b.textContent = state.connected ? '已同步' : '已断开';
+      if (b) b.textContent = !state.connected ? '已断开' : (state.peerAway ? 'Ta 不在' : '已同步');
     }
     const send = $('#chatSend');
     if (send) send.disabled = !state.connected;
@@ -1271,6 +1346,8 @@
     negotiating: '协商中',
     waiting: '等 Ta 进来',
     connected: '已连上',
+    away: '对方暂时不在（连接还在）',
+    recovering: '通道断开，正在静默重拨',
     retrying: '重试中',
     failed: '失败',
   };
@@ -1311,6 +1388,7 @@
       `信令连接：${d.sigState || '-'}${d.sigState === 'open' && d.sigMs ? ' · 首次建链 ' + d.sigMs + 'ms' : ''}${d.sigReconnect ? ' · 自动重连 ' + d.sigReconnect + ' 次' : ''}`,
       `信令 socket：readyState=${d.wsState == null ? -1 : d.wsState} · peer.open=${!!d.peerOpen} · disconnected=${!!d.peerDisconnected}${d.sigRefresh ? ' · 回前台重刷 ' + d.sigRefresh + ' 次' : ''}`,
       `页面：${d.visibility || '-'}${d.hiddenMs ? '（上次切走 ' + Math.round(d.hiddenMs / 1000) + ' 秒）' : ''}`,
+      `对方：${d.away ? '暂时不在（连接还留着）' + (d.awayMs ? ' · 上次不在 ' + Math.round(d.awayMs / 1000) + ' 秒' : '') : (d.connOpen ? '在' : '不在')}${d.rebuild ? ' · 静默重拨 ' + d.rebuild + ' 轮' : ''}${d.recoverMs ? ' · 上次恢复 ' + (d.recoverMs / 1000).toFixed(1) + ' 秒' : ''}`,
       `尝试次数：第 ${d.attempt || 1} 次${state.role === 'guest' && d.maxAttempt > 1 ? ' / 最多 ' + d.maxAttempt + ' 次' : ''}`,
       `阶段：${phaseText(d)}`,
       `数据通道：${d.connState === 'none' ? '还没创建' : (d.connOpen ? '已打开' : '已创建，未打开')}`,
@@ -1371,7 +1449,9 @@
     if (lockPassed()) {
       $('#lock').classList.add('hidden');
       $('#gate').classList.add('hidden');
-      go('home');
+      // 页面被系统回收后重新打开：直接回到上次的房间，不用再输 6 位码
+      const saved = window.P2P && window.P2P.savedSession ? window.P2P.savedSession(60 * 60 * 1000) : null;
+      if (!resumeSavedRoom(saved)) go('home');
     } else {
       setTimeout(() => { try { $('#lockInput').focus(); } catch {} }, 320);
     }

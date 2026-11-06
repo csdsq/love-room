@@ -276,6 +276,9 @@ body::before {
 .conn.on i { background: var(--green); box-shadow: 0 0 8px rgba(126, 224, 176, 0.7); }
 .conn.on b { color: var(--green); }
 .conn b { font-weight: 500; }
+/* 对方切到别的应用去了：连接还在，只是人不在 —— 琥珀色，和「真的断了」区分开 */
+.conn.away i { background: #e0a83c; box-shadow: 0 0 6px rgba(224, 168, 60, 0.55); }
+.conn.away b { color: #e0a83c; }
 .points {
   font-size: 12.5px; color: var(--rose-soft);
   background: rgba(255, 95, 143, 0.14);

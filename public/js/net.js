@@ -8,8 +8,17 @@
 
   const ID_PREFIX = 'duo-r-';        // PeerJS 全局命名空间前缀，避免撞号
   const HANDSHAKE_TIMEOUT = 25000;   // 建连超时（手机流量下 ICE 协商更慢）
-  const HB_INTERVAL = 4000;          // 心跳间隔
-  const HB_TIMEOUT = 14000;          // 多久没动静算掉线
+  const HB_INTERVAL = 4000;          // 心跳间隔（后台本来就会被浏览器节流，不用我们操心）
+  const HB_AWAY = 45000;             // 多久没动静 → 「Ta 暂时不在」。只降级界面，绝不拆连接
+
+  /* 「切到微信再切回来」是主路径，所以设计目标不是「保活多久」，而是
+     「无论离开多久，回来 1~3 秒内自动接上，用户不用做任何操作」。
+     因此：心跳超时只降级、不拆链；通道真断了走静默重拨；只有通道持续
+     起不来 GIVE_UP_AFTER 才认为对方真的关掉了页面。 */
+  const REBUILD_DELAY = [800, 1500, 3000, 5000, 8000];   // 通道断了的静默重拨退避
+  const REBUILD_MAX = 12;                                // 最多重拨几轮
+  const GIVE_UP_AFTER = 180000;                          // 通道一直起不来多久才认「Ta 走了」
+  const SESSION_KEY = 'duo_session';                     // 同一标签页内记住房间，页面被回收后自动回去
 
   /* 重试策略：连不上时不要静默卡住，要么退避重试，要么把原因说清楚 */
   const GUEST_MAX_RETRY = 2;                     // 客人拨号失败最多再试 2 次（共 3 轮）
@@ -156,6 +165,11 @@
   let hbCheck = null;
   let lastRecv = 0;
   let closed = false;
+  let away = false;                  // 对方暂时不在（切到别的应用 / 锁屏），连接还在
+  let rebuildTimer = null;           // 静默重拨的定时器
+  let rebuildTries = 0;              // 已经重拨了几轮
+  let giveUpTimer = null;            // 通道一直起不来时才启用：到点才认「真的走了」
+  let everOpen = false;              // 这一轮会话有没有连通过（决定 failed 是「拨不上」还是「掉线了」）
   let activePc = null;               // 当前 RTCPeerConnection，诊断面板直接读它
   let diagTimers = [];               // 诊断用的定时器，切会话时统一清掉
   let onReadyHost = null;            // 最近一次 host() 的回调，「重新连接」时复用
@@ -173,7 +187,9 @@
 
   const hooks = {
     open: null,      // (peerId) => {}           通道打开
-    close: null,     // () => {}                 对方断开
+    close: null,     // () => {}                 对方真的走了（关页面 / 通道长时间起不来）
+    away: null,      // () => {}                 对方暂时不在（切后台），连接仍在
+    back: null,      // (awayMs) => {}           对方回来了，连接一直是通的
     message: null,   // (data) => {}             收到消息
     status: null,    // (text, kind) => {}       过程状态，kind: 'info'|'error'
   };
@@ -273,6 +289,12 @@
     // 最后的现场（面板里永远显示，截图就能定位）
     lastStatus: '', lastStatusAt: 0,
     errType: '', errMsg: '', errAt: 0,
+    // 后台/恢复：对方在不在、我们重拨了几次、静默恢复了多久
+    away: false,           // 对方暂时不在（连接还在）
+    awayAt: 0,
+    awayMs: 0,             // 上一次「不在」持续了多久
+    rebuild: 0,            // 静默重拨的轮数
+    recoverMs: 0,          // 上一次从断到接上花了多久
   };
   let diagBusy = false;
 
@@ -285,6 +307,8 @@
     diag.connState = 'none'; diag.connOpen = false;
     diag.errType = ''; diag.errMsg = ''; diag.errAt = 0;
     diag.lastStatus = ''; diag.lastStatusAt = 0;
+    diag.away = false; diag.awayAt = 0; diag.awayMs = 0;
+    diag.rebuild = 0; diag.recoverMs = 0;
     diagBusy = false;
   }
 
@@ -405,6 +429,9 @@
         if (diag.ice === 'checking') status('正在打通两端网络…');
         else if (diag.ice === 'failed') {
           noteError('ice-failed', '候选对全部失败，网络没打通');
+          // 已经连上过就别判失败：切网络/切前后台都可能把 ICE 打回 failed，
+          // 这时走静默重拨，用户不该看到「连不上」
+          if (everOpen) { collectStats(pc); handleTransportDown('ICE 失败'); return; }
           if (!diagBusy) { diagBusy = true; collectStats(pc); fail(diagHint()); }
         } else if (diag.ice === 'connected' || diag.ice === 'completed') {
           diagBusy = false;
@@ -453,6 +480,8 @@
     clearAnswerTimer();
     clearRetryTimer();
     clearSigTimer();
+    clearRebuildTimer();
+    clearGiveUp();
     clearDiagTimers();
     stopHeartbeat();
     diagBusy = false;
@@ -463,6 +492,11 @@
     suppressSigRetry = false;
     idRetry = 0;
     closed = false;
+    away = false;
+    everOpen = false;
+    rebuildTries = 0;
+    diag.away = false;
+    diag.awayAt = 0;
     try { conn && conn.close(); } catch (e) { /* 已经断了 */ }
     try { peer && peer.destroy(); } catch (e) { /* 已经销毁 */ }
     conn = null;
@@ -541,12 +575,28 @@
     }
     if (!peer || peer.destroyed) return;
 
-    // 客人正在慢速等待房间出现：立刻插一轮，不用再等 8 秒
+    // 客人正在慢速等待房间出现：立刻插一轮，不用再等 6 秒
     if (role === 'guest' && diag.phase === 'retrying' && retryTimer) {
       clearRetryTimer();
       noteSig(reason + '：客人这边立刻再拨一次');
       join(code, onReadyGuest, retryAttempt);
       return;
+    }
+
+    if (conn && conn.open) {
+      // 冻结期间 hbCheck 没跑，lastRecv 还停在冻结前的时间，一解冻就会被
+      // 误判成「对方不在」——先按现在重置，再立刻打一枪让对方也复位。
+      // 注意别在这里清 away：我们回来了不代表对方回来了，等它回包才算。
+      lastRecv = Date.now();
+      send({ __hb: Date.now() });
+      noteSig(reason + '：通道还开着，已重新打招呼');
+    } else if (role && !closed) {
+      // 通道没了：立刻重拨，不等退避
+      rebuildTries = 0;
+      diag.rebuild = 0;
+      clearGiveUp();
+      setPhase('recovering');
+      scheduleRebuild(true);
     }
 
     forceSignalRefresh(reason);
@@ -685,13 +735,22 @@
     watchSignal(p, my, {
       autoReconnect: true,
       reconnectedText: '配对服务已重新连上，房间号码不变（让 Ta 再试一次）',
-      onOpen(first) {
-        const wasSettled = settled;
-        settled = true;
+      onOpen(first, id) {
         clearTimer();
-        setPhase('waiting');
-        if (!first && wasSettled) return;    // 重连成功，不重复回调
-        status('房间已开，等 Ta 输入匹配码');
+        // 号码只算「开好」一次。之后信令重连（sigState 会从 closed 回到 open，
+        // 看起来又像 first）不能重置界面：否则房主会莫名看到「等 Ta 进来」，
+        // 阶段也被打回 waiting，明明数据通道还连着。
+        if (settled) {
+          if (!(conn && conn.open)) setPhase('waiting');
+          noteSig('信令已重新连上，号码不变：' + (id || code));
+          return;
+        }
+        settled = true;
+        if (!(conn && conn.open)) {
+          setPhase('waiting');
+          status('房间已开，等 Ta 输入匹配码');
+        }
+        saveSession();
         if (onReadyHost) onReadyHost(code);
       },
       onError(type, err) {
@@ -884,6 +943,12 @@
       onOpen: dial,
       onError(type, err) {
         if (type === 'peer-unavailable') {
+          // 已经连上过的会话：这是在等对方回来（对方可能切在微信里、页面被冻结），
+          // 不要动整个会话，也不要报「找不到房间」，安静地继续重拨
+          if (everOpen && !(conn && conn.open)) {
+            setPhase('recovering');
+            return scheduleRebuild(false);
+          }
           // 对方可能只是在切微信/重建房间号：先快重试，再慢速等半分钟
           if (attempt < GUEST_MAX_RETRY + GUEST_LONG_MAX) {
             return retryJoin(attempt + 1);
@@ -897,6 +962,10 @@
           return fail('配对服务不认这个 id / key，检查一下 ?signal= 里配的地址');
         }
         if (type === 'network' || type === 'server-error' || type === 'socket-error') {
+          if (everOpen && !(conn && conn.open)) {
+            setPhase('recovering');
+            return scheduleRebuild(false);
+          }
           if (attempt < GUEST_MAX_RETRY + GUEST_LONG_MAX) {
             return retryJoin(attempt + 1);
           }
@@ -938,21 +1007,31 @@
     }, wait);
   }
 
-  /* ---------------- 心跳：对方强杀页面也能被发现 ---------------- */
+  /* ---------------- 心跳：只判断「在不在」，不判断「死没死」 ---------------- */
+  /*  以前 14 秒收不到包就把 conn 扔掉，等于对「切去微信发个码」的人直接判死刑。
+      现在：心跳超时只把界面降级成「Ta 暂时不在」，连接留着；
+      真正的死亡交给 RTCPeerConnection 的 failed / 通道 close，
+      而那也只触发静默重拨，不拆会话。 */
 
   function startHeartbeat() {
     stopHeartbeat();
     lastRecv = Date.now();
     closed = false;
+    away = false;
+    diag.away = false;
+    diag.awayAt = 0;
 
-    hbSend = setInterval(() => {
+    const beat = () => {
       if (conn && conn.open) {
-        try { conn.send({ __hb: 1 }); } catch (e) { /* 通道正在关 */ }
+        try { conn.send({ __hb: Date.now() }); } catch (e) { /* 通道正在关 */ }
       }
-    }, HB_INTERVAL);
+    };
+    beat();
+    hbSend = setInterval(beat, HB_INTERVAL);
 
     hbCheck = setInterval(() => {
-      if (!closed && Date.now() - lastRecv > HB_TIMEOUT) markClosed();
+      if (closed || away) return;
+      if (Date.now() - lastRecv > HB_AWAY) markAway();
     }, 2000);
   }
 
@@ -961,14 +1040,117 @@
     if (hbCheck) { clearInterval(hbCheck); hbCheck = null; }
   }
 
-  function markClosed() {
-    if (closed) return;
-    closed = true;
-    stopHeartbeat();
-    conn = null;
+  // 对方不在：只降级，conn 不动、聊天记录不动、传输也不标记失败
+  function markAway() {
+    if (away) return;
+    away = true;
+    diag.away = true;
+    diag.awayAt = Date.now();
+    if (conn && conn.open) setPhase('away');
+    status('Ta 暂时不在（可能切到别的应用了），连接留着，回来就接着用', 'soft');
+    fire('away');
+  }
+
+  // 对方回来：连接从头到尾没断过，只把状态复原
+  function markBack() {
+    if (!away) return;
+    away = false;
+    diag.away = false;
+    diag.awayMs = diag.awayAt ? Date.now() - diag.awayAt : 0;
+    diag.awayAt = 0;
+    if (conn && conn.open) setPhase('connected');
+    status('Ta 回来了');
+    fire('back', diag.awayMs);
+  }
+
+  function clearRebuildTimer() {
+    if (rebuildTimer) { clearTimeout(rebuildTimer); rebuildTimer = null; }
+  }
+
+  function clearGiveUp() {
+    if (giveUpTimer) { clearTimeout(giveUpTimer); giveUpTimer = null; }
+  }
+
+  function scheduleRebuild(immediate) {
+    if (destroyed || !role) return;
+    if (conn && conn.open) return;
+    if (rebuildTries >= REBUILD_MAX) return;
+    clearRebuildTimer();
+    const wait = immediate ? 0 : REBUILD_DELAY[Math.min(rebuildTries, REBUILD_DELAY.length - 1)];
+    rebuildTimer = setTimeout(() => { rebuildTimer = null; rebuild(); }, wait);
+  }
+
+  // 通道真的断了（close / pc failed）：安静地重拨，别惊动用户
+  function handleTransportDown(reason) {
+    if (destroyed || !role) return;
     diag.connOpen = false;
-    setPhase('idle');
-    fire('close');
+    if (!away) markAway();
+    setPhase('recovering');
+    if (!giveUpTimer) {
+      giveUpTimer = setTimeout(() => {
+        giveUpTimer = null;
+        if (conn && conn.open) return;
+        // 通道一直起不来 3 分钟：这时才认「Ta 真的走了」
+        closed = true;
+        stopHeartbeat();
+        setPhase('idle');
+        fire('close');
+      }, GIVE_UP_AFTER);
+    }
+    scheduleRebuild(false);
+  }
+
+  function rebuild() {
+    if (destroyed || !role) return;
+    if (conn && conn.open) return;
+    rebuildTries++;
+    diag.rebuild = rebuildTries;
+    if (role === 'guest' && code) return redial();
+    if (role === 'host') {
+      // 房主是被动方：客人会回来敲门的，这里只把信令重新挂上，号码不变
+      setPhase('waiting');
+      status('等 Ta 回来…');
+      if (rebuildTries <= 2) forceSignalRefresh('恢复');
+      scheduleRebuild(false);
+    }
+  }
+
+  function redial() {
+    if (role !== 'guest' || !code) return;
+    if (peer && !peer.destroyed && !peer.disconnected) {
+      try {
+        bind(peer.connect(ID_PREFIX + code, { reliable: true }), onReadyGuest, epoch);
+        return;
+      } catch (e) {
+        noteError('redial-failed', e);
+      }
+    }
+    // 信令也掉了：整轮重来，目标房号不变（join 内部会先 teardown）
+    join(code, onReadyGuest, 0);
+  }
+
+  /* ---------------- 同一标签页内记住房间（页面被系统回收后自动回去） ---------------- */
+
+  function saveSession() {
+    if (!role || !code) return;
+    try {
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify({ role, code, at: Date.now() }));
+    } catch (e) { /* 隐私模式可能不给写，忽略 */ }
+  }
+
+  function clearSession() {
+    try { sessionStorage.removeItem(SESSION_KEY); } catch (e) { /* 忽略 */ }
+  }
+
+  function savedSession(maxAge = 3600000) {
+    try {
+      const raw = sessionStorage.getItem(SESSION_KEY);
+      if (!raw) return null;
+      const s = JSON.parse(raw);
+      if (!s || !s.role || !s.code) return null;
+      if (maxAge && Date.now() - (s.at || 0) > maxAge) return null;
+      return s;
+    } catch (e) { return null; }
   }
 
   function bind(c, onReady, my) {
@@ -984,11 +1166,20 @@
       if (my !== epoch || destroyed) return;
       clearTimer();
       clearAnswerTimer();
+      clearRebuildTimer();
+      clearGiveUp();
+      if (diag.awayAt) diag.recoverMs = Date.now() - diag.awayAt;
+      rebuildTries = 0;
+      diag.rebuild = 0;
+      diag.away = false;
+      diag.awayAt = 0;
+      everOpen = true;
       diag.connState = 'open';
       diag.connOpen = true;
       setPhase('connected');
       startHeartbeat();
       status('已连上');
+      saveSession();
       fire('open', peer && peer.id);
       if (onReady) onReady(code);
     });
@@ -996,6 +1187,7 @@
     c.on('data', (data) => {
       if (my !== epoch || destroyed) return;
       lastRecv = Date.now();
+      markBack();                       // 收到任何包就说明对方在
       if (data && typeof data === 'object') {
         if (data.__hb) return;          // 心跳不打扰上层
         fire('message', data);
@@ -1004,13 +1196,15 @@
 
     c.on('close', () => {
       if (my !== epoch || destroyed) return;
-      diag.connOpen = false;
-      markClosed();
+      diag.connState = 'closed';
+      handleTransportDown('通道被关掉了');
     });
 
     c.on('error', (err) => {
       noteError((err && err.type) || 'conn-error', err);
       console.warn('[p2p] conn error', err);
+      // 连上过的通道出错又没开：走静默重拨，别把会话判死
+      if (everOpen && !(conn && conn.open)) scheduleRebuild(false);
     });
   }
 
@@ -1040,9 +1234,26 @@
     destroyed = true;
     teardown();
     destroyWarm();
+    // 注意：这里不清 sessionStorage。刷新 / 切后台被回收都会走 destroy，
+    // 真把房间记号抹掉，页面重建后就回不去了。主动退场走 leave()。
     role = null;
     code = '';
     setPhase('idle');
+  }
+
+  // 用户主动退场：关连接 + 忘掉房间
+  function leave() {
+    destroy();
+    clearSession();
+  }
+
+  /* 回到前台时的恢复入口：通道还在就打个招呼，没了就立刻重拨。
+     这条路径不需要用户做任何事，也不需要刷新页面。 */
+  function resume(reason = '页面恢复') {
+    if (!role) return false;
+    destroyed = false;
+    onPageShow(reason);
+    return true;
   }
 
   // 手动「重新连接」：能只重连信令就不换号码（号码变了对方得重新输）
@@ -1079,9 +1290,14 @@
     sendRaw,
     buffered,
     destroy,
+    leave,
     reconnect,
+    resume,
+    savedSession,
+    clearSession,
     on(name, fn) { hooks[name] = fn; },
     get connected() { return !!(conn && conn.open); },
+    get away() { return away; },
     get role() { return role; },
     get code() { return code; },
     get peerId() { return peer && peer.id; },
@@ -1135,6 +1351,11 @@
         peerDisconnected: !!(peer && peer.disconnected),
         wsState: ws ? ws.readyState : -1,
         wsBuffered: ws && typeof ws.bufferedAmount === 'number' ? ws.bufferedAmount : 0,
+        // 后台/恢复现场：对方在不在、静默重拨了几轮、上次断了多久接上
+        away,
+        awayMs: diag.awayMs,
+        rebuild: diag.rebuild,
+        recoverMs: diag.recoverMs,
       }, live);
     },
     diagHint,
